@@ -254,98 +254,137 @@ def cameras_from_rig(rec, frame_times, video_start, poses_file):
     return [im.name for im in images], rotations, centres, report
 
 
-def refine_directions(root, cloud, passes=3, samples=60000, scale=0.25):
-    """Nudge each camera's direction so its picture agrees with what the other cameras see.
-
-    Lidar points are projected into every frame (hidden ones skipped); each point's reference brightness
-    is the median over the frames that see it, and each frame is turned by a fraction of a degree to
-    best match those references. Rewrites cameras.npz. Returns (before, after) brightness spread.
-    """
+def _gradient(image):
     import cv2
-    from scipy.optimize import minimize
-    from scipy.spatial.transform import Rotation
-    path = os.path.join(root, "cameras.npz")
-    cams = dict(np.load(path))
-    f, cx, cy, k = cams["intrinsics"]
-    width, height = (int(v) for v in cams["size"])
-    w, h = int(width * scale), int(height * scale)
-    names, rot, centre = [str(n) for n in cams["names"]], cams["rotations"].copy(), cams["centres"]
-    grey = [cv2.GaussianBlur(cv2.cvtColor(cv2.resize(cv2.imread(os.path.join(root, "images", n)), (w, h),
-            interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY).astype(np.float32), (7, 7), 2.0) for n in names]
-    xyz, _ = livox_room.read_ply(cloud)
-    rng = np.random.default_rng(1)
-    dist = np.linalg.norm(xyz - centre.mean(0), axis=1)
-    pool = xyz[(dist > 0.8) & (dist < 10)]
-    pts = pool[rng.choice(len(pool), min(samples, len(pool)), replace=False)]
-    full = xyz[rng.choice(len(xyz), min(len(xyz), 800000), replace=False)]
+    blurred = cv2.GaussianBlur(image, (0, 0), 2.0)
+    return np.hypot(cv2.Sobel(blurred, cv2.CV_32F, 1, 0), cv2.Sobel(blurred, cv2.CV_32F, 0, 1))
 
-    def project(r, c, p):
-        q = (p - c) @ r
+
+class LidarViews:
+    """Renders what the lidar saw (edges of brightness and depth) as a camera would see it, and scores
+    how well that matches the camera's own photo. This compares the photos with the lidar directly,
+    unlike checks that only compare photos with each other."""
+
+    def __init__(self, cloud, cx, cy, width, height, points=700000, scale=0.2):
+        xyz, refl = livox_room.read_ply(cloud)
+        pick = np.random.default_rng(0).choice(len(xyz), min(points, len(xyz)), replace=False)
+        self.xyz, self.refl = xyz[pick], refl[pick]
+        self.cx, self.cy, self.scale = cx, cy, scale
+        self.w, self.h = int(width * scale), int(height * scale)
+
+    def photo(self, path):
+        import cv2
+        img = cv2.resize(cv2.imread(path), (self.w, self.h), interpolation=cv2.INTER_AREA)
+        return _gradient(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32))
+
+    def render(self, rot, centre, f, k):
+        import cv2
+        q = (self.xyz - centre) @ rot
         z = q[:, 2]
-        front = z > 0.3
+        front = z > 0.4
         zz = np.where(front, z, 1)
         x, y = q[:, 0] / zz, q[:, 1] / zz
         r2 = x * x + y * y
-        u, v = (f * x * (1 + k * r2) + cx) * scale, (f * y * (1 + k * r2) + cy) * scale
-        return u, v, z, front & (u >= 1) & (u < w - 2) & (v >= 1) & (v < h - 2) & (r2 < 3)
+        u = (f * x * (1 + k * r2) + self.cx) * self.scale
+        v = (f * y * (1 + k * r2) + self.cy) * self.scale
+        ok = front & (u >= 0) & (u < self.w - 1) & (v >= 0) & (v < self.h - 1) & (r2 < 3)
+        ui, vi, zi = u[ok].astype(int), v[ok].astype(int), z[ok].astype(np.float32)
+        depth = np.full((self.h, self.w), np.inf, np.float32)
+        np.minimum.at(depth, (vi, ui), zi)
+        nearest = zi <= depth[vi, ui] * 1.03 + 0.03
+        bright = np.zeros((self.h, self.w), np.float32)
+        count = np.zeros((self.h, self.w), np.float32)
+        np.add.at(bright, (vi[nearest], ui[nearest]), np.minimum(self.refl[ok][nearest], 150).astype(np.float32))
+        np.add.at(count, (vi[nearest], ui[nearest]), 1)
+        bright = np.where(count > 0, bright / np.maximum(count, 1), 0)
+        depth[np.isinf(depth)] = 0
+        valid = cv2.erode(cv2.dilate((count > 0).astype(np.uint8), np.ones((3, 3), np.uint8)),
+                          np.ones((5, 5), np.uint8)) > 0
+        return _gradient(bright) + 40 * _gradient(np.log1p(depth)), valid
 
-    def sample(img, u, v):
-        x0, y0 = u.astype(int), v.astype(int)
-        ax, ay = u - x0, v - y0
-        return (img[y0, x0] * (1 - ax) * (1 - ay) + img[y0, x0 + 1] * ax * (1 - ay)
-                + img[y0 + 1, x0] * (1 - ax) * ay + img[y0 + 1, x0 + 1] * ax * ay)
+    def match(self, photo, rot, centre, f, k):
+        edges, valid = self.render(rot, centre, f, k)
+        if valid.sum() < 500:
+            return None
+        a, b = edges[valid], photo[valid]
+        return float(np.mean((a - a.mean()) / (a.std() + 1e-6) * (b - b.mean()) / (b.std() + 1e-6)))
 
-    seen = []
-    for i in range(len(names)):
-        u, v, z, ok = project(rot[i], centre[i], full)
-        buf = np.full((h, w), np.inf, np.float32)
-        np.minimum.at(buf, (v[ok].astype(int), u[ok].astype(int)), z[ok].astype(np.float32))
-        buf = cv2.erode(buf, np.ones((3, 3), np.uint8))
-        u, v, z, ok = project(rot[i], centre[i], pts)
-        vis = np.zeros(len(pts), bool)
-        vis[ok] = z[ok] <= buf[v[ok].astype(int), u[ok].astype(int)] * 1.05 + 0.05
-        seen.append(vis)
 
-    def table():
-        vals = np.full((len(names), len(pts)), np.nan, np.float32)
-        for i in range(len(names)):
-            u, v, z, ok = project(rot[i], centre[i], pts)
-            ok &= seen[i]
-            if ok.any():
-                vals[i, ok] = sample(grey[i], u[ok], v[ok])
-        return vals
+def calibrate_rig(rec, root, frame_times, video_start, poses_file, cloud, still_seconds=6.0):
+    """Find where the phone sits on the rig and how its lens behaves, by matching photos to the lidar.
 
-    def spread(vals):
-        keep = np.sum(~np.isnan(vals), 0) >= 5
-        return float(np.mean(np.nanstd(vals[:, keep], 0)))
+    Each frame's camera direction is the lidar's measured direction at that moment turned by a fixed
+    mounting rotation, and its position is the lidar's plus a fixed offset. Solved: the mounting
+    rotation, the offset, focal length, lens distortion and a small clock correction.
+    The starting guess for the mounting comes from the photo reconstruction: its turns are matched to
+    the lidar's, its tilt is fixed with the still start (the rig upright), and its heading, which turns
+    about one axis leave undetermined, is found by trying every heading against the lidar.
+    """
+    from scipy.optimize import minimize
+    from scipy.spatial.transform import Rotation, Slerp
+    names, rotations, _, report = cameras_from_rig(rec, frame_times, video_start, poses_file)
+    camera = next(iter(rec.cameras.values()))
+    f0, cx, cy, k0 = (float(v) for v in camera.params)
+    poses = np.loadtxt(poses_file, delimiter=",", skiprows=1)
+    turn_at = Slerp(poses[:, 0], Rotation.from_matrix(poses[:, 4:13].reshape(-1, 3, 3)))
 
-    vals = table()
-    before = spread(vals)
-    for _ in range(passes):
-        counts = np.sum(~np.isnan(vals), 0)
-        ref = np.full(len(pts), np.nan, np.float32)
-        ref[counts >= 4] = np.nanmedian(vals[:, counts >= 4], 0)
-        for i in range(len(names)):
-            sel = seen[i] & ~np.isnan(ref)
-            if sel.sum() < 300:
-                continue
-            p, r = pts[sel], ref[sel]
+    def lidar_at(t):
+        t = np.clip(t, poses[0, 0], poses[-1, 0])
+        return turn_at(t).as_matrix(), np.column_stack([np.interp(t, poses[:, 0], poses[:, c]) for c in (1, 2, 3)])
 
-            def cost(q):
-                u, v, z, ok = project(Rotation.from_rotvec(q).as_matrix() @ rot[i], centre[i], p)
-                if ok.sum() < 200:
-                    return 1e3
-                e = sample(grey[i], u[ok], v[ok]) - r[ok]
-                return float(np.mean(np.minimum(np.abs(e - np.median(e)), 40)))   # ignore brightness offsets
+    times = np.array([video_start + frame_times[n] for n in names])
+    still = times - video_start < still_seconds
+    if still.sum() < 3:
+        sys.exit("The video needs a few seconds of standing still at the start.")
+    down = np.mean([r[:, 1] for r in rotations[still]], 0)      # camera's image-down axis
+    down /= np.linalg.norm(down)
+    rotations = np.array([rotation_between(down, np.array([0, 0, -1.0])) @ r for r in rotations])
 
-            q = minimize(cost, np.zeros(3), method="Powell",
-                         options={"xtol": 2e-4, "ftol": 1e-3, "maxfev": 200}).x
-            if np.degrees(np.linalg.norm(q)) < 3:
-                rot[i] = Rotation.from_rotvec(q).as_matrix() @ rot[i]
-        vals = table()
-    cams["rotations"] = rot
-    np.savez(path, **cams)
-    return before, spread(vals)
+    views = LidarViews(cloud, cx, cy, camera.width, camera.height)
+    sample = list(range(0, len(names), max(1, len(names) // 25)))
+    photos = {i: views.photo(os.path.join(root, "images", names[i])) for i in sample}
+
+    def mean_match(rot_of, centre_of, f, k):
+        scores = [views.match(photos[i], rot_of(i), centre_of(i), f, k) for i in sample]
+        scores = [s for s in scores if s is not None]
+        return float(np.mean(scores)) if scores else -1.0
+
+    lidar_rot, lidar_pos = lidar_at(times)
+    heading = max(np.radians(np.arange(-180, 180, 3)), key=lambda y: mean_match(
+        lambda i: Rotation.from_rotvec([0, 0, y]).as_matrix() @ rotations[i], lambda i: lidar_pos[i], f0, k0))
+    turned = Rotation.from_rotvec([0, 0, heading]).as_matrix()
+    mount0 = nearest_rotation(np.mean([lidar_rot[i].T @ turned @ rotations[i] for i in np.flatnonzero(still)], 0))
+    offset0 = np.array(report["offset_m"])
+
+    def unpack(p):
+        return Rotation.from_rotvec(p[0:3]).as_matrix() @ mount0, offset0 + p[3:6], f0 * np.exp(p[6]), k0 + p[7], p[8]
+
+    def score(p):
+        mount, offset, f, k, dt = unpack(p)
+        rot, pos = lidar_at(times + dt)
+        return mean_match(lambda i: rot[i] @ mount, lambda i: pos[i] + rot[i] @ offset, f, k)
+
+    start = np.zeros(9)
+    before = score(start)
+    result = minimize(lambda p: -score(p), start, method="Powell",
+                      options={"xtol": 1e-3, "ftol": 1e-4, "maxfev": 700})
+    mount, offset, f, k, dt = unpack(result.x)
+    rot, pos = lidar_at(times + dt)
+    save_cameras(root, rec, names, [r @ mount for r in rot], pos + np.einsum("nij,j->ni", rot, offset))
+    cams = dict(np.load(os.path.join(root, "cameras.npz")))
+    cams["intrinsics"] = np.array([f, cx, cy, k])
+    np.savez(os.path.join(root, "cameras.npz"), **cams)
+    return {"heading_deg": float(np.degrees(heading)), "match_before": before, "match_after": -result.fun,
+            "offset_m": offset.tolist(), "focal_px": f, "distortion": k, "clock_shift_s": dt}
+
+
+def rotation_between(a, b):
+    """Smallest rotation taking unit vector a onto unit vector b."""
+    v, c = np.cross(a, b), float(a @ b)
+    if np.linalg.norm(v) < 1e-9:
+        return np.eye(3) if c > 0 else np.diag([1.0, -1.0, -1.0])
+    k = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    return np.eye(3) + k + k @ k / (1 + c)
 
 
 def place_by_path(args, rec, root, video, frame_times):
@@ -355,16 +394,13 @@ def place_by_path(args, rec, root, video, frame_times):
         sys.exit("Missing %s (written by livox_record.py --phone); it holds the video's start time." % sidecar)
     info = json.load(open(sidecar))
     video_start = info["first_frame_time"] + info["clock_offset_s"]
-    names, rotations, centres, report = cameras_from_rig(rec, frame_times, video_start, args.poses)
-    print("Placed %d frames along the lidar's path (%d turn pairs matched)" % (len(names), report["pairs"]))
-    print("Camera sits %.0f cm from the lidar's centre: (%+.2f, %+.2f, %+.2f) m in the lidar's own axes" % (
-        100 * np.linalg.norm(report["offset_m"]), *report["offset_m"]))
-    print("Lidar and photo estimates of each turn differ by %.1f degrees typically (the camera directions "
-          "used come from the photos, which are the steadier of the two)" % report["wobble_median_deg"])
-    save_cameras(root, rec, names, rotations, centres)
-    before, after = refine_directions(root, args.cloud)
-    print("Refined each frame's direction: brightness disagreement between frames %.1f -> %.1f grey levels" % (
-        before, after))
+    print("Matching the video to the lidar (about 10 minutes)...")
+    result = calibrate_rig(rec, root, frame_times, video_start, args.poses, args.cloud)
+    print("Photo-to-lidar edge match: %.3f before calibration, %.3f after (higher is better)" % (
+        result["match_before"], result["match_after"]))
+    print("Camera offset from the lidar: (%+.2f, %+.2f, %+.2f) m; lens focal %.0f px, distortion %.3f; "
+          "clock shift %+.2f s" % (*result["offset_m"], result["focal_px"], result["distortion"], result["clock_shift_s"]))
+    json.dump(result, open(os.path.join(root, "rig_calibration.json"), "w"), indent=1)
 
 
 def main():

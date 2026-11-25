@@ -222,14 +222,15 @@ To colour from a recording made with `--phone`:
 .venv/bin/python livox_colour.py scans/walk-<time>-stitched.ply --photos photos/my-walk
 ```
 
-Frames are taken from the video at 2 per second. Because both devices were on one rig, each frame's position
-comes from the lidar's measured path at that moment (plus the camera's offset on the rig, which is solved for),
-and its direction from the photo reconstruction, turned into the lidar's world by matching how the rig rotated
-in both. A final pass nudges each frame by fractions of a degree so the frames agree on colour. This works even
-when the rig only turns on the spot, where a photo-only reconstruction cannot tell how far away things are.
+Frames are taken from the video at 2 per second. Because both devices were on one rig, each frame's direction
+is the lidar's measured direction at that moment, turned by the phone's fixed angle on the rig, and its
+position is the lidar's plus the phone's fixed offset. That angle and offset, the lens's focal length and
+distortion, and a small clock correction are solved by rendering what the lidar saw from each frame's position
+and lining up its edges with the photo's edges. The video needs a few seconds of standing still at the start,
+which fixes which way is up. Expect about 10 minutes for 150 frames.
 
-Tested on one 75-second table-top recording: 149 of 150 frames placed, colours within about 1° when checked
-against frames held out of the colouring. A walking capture has not been processed yet.
+Tested on one 75-second table-top recording: 149 of 150 frames placed, with the lidar and the photos lining up
+when checked frame by frame, including frames taken mid-turn. A walking capture has not been processed yet.
 
 ## A handheld rig with a 360 camera
 
