@@ -45,21 +45,42 @@ def prepare_images(source, out_dir, longest=3200):
     return len(files)
 
 
-def reconstruct(root):
-    model = os.path.join(root, "sfm", "0")
-    if os.path.exists(os.path.join(model, "images.bin")):
-        return pycolmap.Reconstruction(model)
+def prepare_video(video, out_dir, fps=2.0, longest=2000):
+    """Pull still frames out of a video at `fps`. Returns {image name: seconds from the first frame}."""
+    os.makedirs(out_dir, exist_ok=True)
+    if not glob.glob(os.path.join(out_dir, "frame_*.jpg")):
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-i", os.path.expanduser(video),
+                        "-vf", "fps=%g,scale=%d:-2" % (fps, longest), "-q:v", "2",
+                        os.path.join(out_dir, "frame_%05d.jpg")], check=True)
+    names = sorted(os.path.basename(f) for f in glob.glob(os.path.join(out_dir, "frame_*.jpg")))
+    return {name: i / fps for i, name in enumerate(names)}
+
+
+def best_model(root):
+    """COLMAP can split a set into several pieces; use the one that located the most photos."""
+    found = [pycolmap.Reconstruction(os.path.dirname(f))
+             for f in glob.glob(os.path.join(root, "sfm", "*", "images.bin"))]
+    return max(found, key=lambda r: r.num_reg_images()) if found else None
+
+
+def reconstruct(root, sequential=False):
+    existing = best_model(root)
+    if existing is not None:
+        return existing
     os.makedirs(os.path.join(root, "sfm"), exist_ok=True)
     database = os.path.join(root, "db.db")
     reader = pycolmap.ImageReaderOptions()
     reader.camera_model = "SIMPLE_RADIAL"          # livox_colour.py assumes this model
     pycolmap.extract_features(database, os.path.join(root, "images"),
                               camera_mode=pycolmap.CameraMode.SINGLE, reader_options=reader)
-    pycolmap.match_exhaustive(database)
+    if sequential:      # video: each frame only needs comparing with its neighbours in time
+        pycolmap.match_sequential(database, pairing_options=pycolmap.SequentialPairingOptions(overlap=12))
+    else:
+        pycolmap.match_exhaustive(database)
     maps = pycolmap.incremental_mapping(database, os.path.join(root, "images"), os.path.join(root, "sfm"))
     if not maps:
         sys.exit("The photos could not be reconstructed. They need more overlap, or some sideways movement.")
-    return pycolmap.Reconstruction(model)
+    return best_model(root)
 
 
 def rotation_to_z(direction):
@@ -130,19 +151,154 @@ def coarse_candidates(levelled, floor, lidar, lidar_floor, lidar_ceiling, cell=0
     return candidates
 
 
+def save_cameras(root, rec, names, rotations, centres):
+    """Write photos/<name>/cameras.npz: every located photo's pose in the lidar frame, in metres.
+
+    rotations[i] holds the camera's axes (x right, y down, z forward) as columns, in lidar coordinates.
+    """
+    camera = next(iter(rec.cameras.values()))
+    np.savez(os.path.join(root, "cameras.npz"), names=np.array(names), rotations=np.array(rotations),
+             centres=np.array(centres), intrinsics=np.array(camera.params, dtype=float),   # f, cx, cy, k
+             size=np.array([camera.width, camera.height]))
+    print("Wrote %s (%d cameras)" % (os.path.join(root, "cameras.npz"), len(names)))
+
+
+def save_cameras_from_fit(root, rec, to_lidar):
+    """Cameras for a reconstruction placed as a whole by a scale-rotate-shift fit."""
+    scale = np.cbrt(np.linalg.det(to_lidar[:3, :3]))
+    turn = to_lidar[:3, :3] / scale
+    images = sorted(rec.images.values(), key=lambda im: im.name)
+    save_cameras(root, rec, [im.name for im in images],
+                 [turn @ im.cam_from_world().rotation.matrix().T for im in images],
+                 [to_lidar[:3, :3] @ im.projection_center() + to_lidar[:3, 3] for im in images])
+
+
+def similarity(source, target):
+    """Best scale, rotation and shift taking source points onto target points (Umeyama). Returns 4x4."""
+    ms, mt = source.mean(0), target.mean(0)
+    a, b = source - ms, target - mt
+    u, d, vt = np.linalg.svd(b.T @ a / len(a))
+    sign = np.diag([1, 1, np.sign(np.linalg.det(u @ vt))])
+    rot = u @ sign @ vt
+    scale = np.trace(np.diag(d) @ sign) / (a ** 2).sum(1).mean()
+    out = np.eye(4)
+    out[:3, :3], out[:3, 3] = scale * rot, mt - scale * rot @ ms
+    return out
+
+
+def rotation_axis(rot):
+    """Axis times angle (radians) of a rotation matrix."""
+    angle = np.arccos(np.clip((np.trace(rot) - 1) / 2, -1, 1))
+    axis = np.array([rot[2, 1] - rot[1, 2], rot[0, 2] - rot[2, 0], rot[1, 0] - rot[0, 1]])
+    norm = np.linalg.norm(axis)
+    return axis / norm * angle if norm > 1e-9 else np.zeros(3)
+
+
+def nearest_rotation(matrix):
+    u, _, vt = np.linalg.svd(matrix)
+    return u @ np.diag([1, 1, np.sign(np.linalg.det(u @ vt))]) @ vt
+
+
+def cameras_from_rig(rec, frame_times, video_start, poses_file):
+    """Camera poses for video frames shot on the same rig as the lidar.
+
+    A reconstruction from a rig that mostly turns on the spot gets camera directions right but not
+    depths or sizes, so only its directions are used:
+      - Direction of each camera: the photo reconstruction's, turned into the lidar's world. The turn
+        between the two worlds comes from matching the axes the rig rotated about in both.
+      - Position of each camera: the lidar's measured position at that moment, plus the camera's fixed
+        offset on the rig (solved here; it only needs to be right to a few cm).
+    Returns (names, rotations, centres, report dict).
+    """
+    from scipy.spatial.transform import Rotation, Slerp
+    poses = np.loadtxt(poses_file, delimiter=",", skiprows=1)
+    turn_at = Slerp(poses[:, 0], Rotation.from_matrix(poses[:, 4:13].reshape(-1, 3, 3)))
+    images = [im for im in sorted(rec.images.values(), key=lambda im: im.name)
+              if im.name in frame_times and poses[0, 0] < video_start + frame_times[im.name] < poses[-1, 0]]
+    n = len(images)
+    if n < 10:
+        sys.exit("Too few video frames overlap the lidar recording in time.")
+    times = np.array([video_start + frame_times[im.name] for im in images])
+    cam_pos = np.array([im.projection_center() for im in images])
+    cam_rot = np.array([im.cam_from_world().rotation.matrix().T for im in images])
+    lidar_rot = turn_at(times).as_matrix()
+    lidar_pos = np.column_stack([np.interp(times, poses[:, 0], poses[:, k]) for k in (1, 2, 3)])
+
+    axes_cam, axes_lidar = [], []
+    for gap in (4, 8, 16, 32):
+        for i in range(n - gap):
+            a = rotation_axis(cam_rot[i + gap] @ cam_rot[i].T)
+            b = rotation_axis(lidar_rot[i + gap] @ lidar_rot[i].T)
+            if min(np.linalg.norm(a), np.linalg.norm(b)) > np.radians(8):
+                axes_cam.append(a)
+                axes_lidar.append(b)
+    if len(axes_cam) < 10:
+        sys.exit("The rig did not turn enough during the recording to line the video up with the lidar.")
+    world = nearest_rotation(np.array(axes_lidar).T @ np.array(axes_cam))
+    rotations = np.array([world @ r for r in cam_rot])
+    mount = nearest_rotation(np.mean([lidar_rot[i].T @ rotations[i] for i in range(n)], axis=0))
+    wobble = np.degrees([np.linalg.norm(rotation_axis(mount.T @ lidar_rot[i].T @ rotations[i])) for i in range(n)])
+
+    # camera offset on the rig:  scale * world @ cam_i + shift - lidar_rot_i @ offset = lidar_pos_i
+    rows = np.zeros((3 * n, 7))
+    rows[:, 0] = (cam_pos @ world.T).ravel()
+    rows[:, 1:4] = np.tile(np.eye(3), (n, 1))
+    rows[:, 4:7] = -lidar_rot.reshape(3 * n, 3)
+    solution, *_ = np.linalg.lstsq(rows, lidar_pos.ravel(), rcond=None)
+    offset = solution[4:7]
+    if np.linalg.norm(offset) > 0.5:      # implausible for a handheld rig: fall back to "at the lidar"
+        offset = np.zeros(3)
+    centres = lidar_pos + np.einsum("nij,j->ni", lidar_rot, offset)
+    report = {"pairs": len(axes_cam), "wobble_median_deg": float(np.median(wobble)),
+              "wobble_p90_deg": float(np.percentile(wobble, 90)), "offset_m": offset.tolist()}
+    return [im.name for im in images], rotations, centres, report
+
+
+def place_by_path(args, rec, root, video, frame_times):
+    import json
+    sidecar = os.path.splitext(video)[0] + ".phone.json"
+    if not os.path.exists(sidecar):
+        sys.exit("Missing %s (written by livox_record.py --phone); it holds the video's start time." % sidecar)
+    info = json.load(open(sidecar))
+    video_start = info["first_frame_time"] + info["clock_offset_s"]
+    names, rotations, centres, report = cameras_from_rig(rec, frame_times, video_start, args.poses)
+    print("Placed %d frames along the lidar's path (%d turn pairs matched)" % (len(names), report["pairs"]))
+    print("Camera sits %.0f cm from the lidar's centre: (%+.2f, %+.2f, %+.2f) m in the lidar's own axes" % (
+        100 * np.linalg.norm(report["offset_m"]), *report["offset_m"]))
+    print("Camera direction vs lidar direction disagree by %.1f degrees typically, %.1f at worst-tenth" % (
+        report["wobble_median_deg"], report["wobble_p90_deg"]))
+    if report["wobble_median_deg"] > 2:
+        print("That is a lot: either the phone moves relative to the lidar on the rig, or one of the two "
+              "motion estimates is off. Expect colours to be offset by several cm per metre of distance.")
+    save_cameras(root, rec, names, rotations, centres)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("photo_folder")
     ap.add_argument("cloud", help="the stitched lidar cloud (.ply)")
     ap.add_argument("--name", default="photos", help="working folder name under photos/")
+    ap.add_argument("--fps", type=float, default=2.0, help="frames per second to take from a video")
+    ap.add_argument("--poses", help="for a video recorded with the lidar (livox_record.py --phone): the "
+                    "stitcher's -poses.csv. The cameras are then placed along the lidar's own path.")
     args = ap.parse_args()
 
     root = os.path.join(HERE, "photos", args.name)
-    count = prepare_images(args.photo_folder, os.path.join(root, "images"))
+    source = os.path.expanduser(args.photo_folder)
+    is_video = os.path.isfile(source)
+    if is_video:
+        frame_times = prepare_video(source, os.path.join(root, "images"), args.fps)
+        count = len(frame_times)
+    else:
+        frame_times = {}
+        count = prepare_images(source, os.path.join(root, "images"))
     print("%d photos ready in %s" % (count, os.path.join(root, "images")))
-    rec = reconstruct(root)
+    rec = reconstruct(root, sequential=is_video)
     print("Photo reconstruction: %d of %d photos located, %d 3D points" % (
         rec.num_reg_images(), count, rec.num_points3D()))
+
+    if args.poses:
+        return place_by_path(args, rec, root, source, frame_times)
 
     to_level, levelled, floor = level(rec)
     lidar, _ = livox_room.read_ply(args.cloud)
@@ -167,6 +323,7 @@ def main():
     fitness, rmse, fit = best
     to_lidar = fit @ to_level
     np.save(os.path.join(root, "sfm_to_lidar.npy"), to_lidar)
+    save_cameras_from_fit(root, rec, to_lidar)
     scale = np.cbrt(np.linalg.det(fit[:3, :3]))
     centres = np.array([im.projection_center() for im in rec.images.values()])
     centres = centres @ to_lidar[:3, :3].T + to_lidar[:3, 3]

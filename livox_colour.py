@@ -3,8 +3,8 @@
 
     .venv/bin/python livox_colour.py scans/<name>-stitched.ply --photos photos/office
 
-`--photos` is a folder prepared by livox_photos.py: images/, sfm/0 (the photo
-reconstruction) and sfm_to_lidar.npy (where that reconstruction sits in the scan).
+`--photos` is a folder prepared by livox_photos.py: images/ and cameras.npz
+(where each photo was taken, in the scan's coordinates).
 
 Each lidar point is projected into every photo. A photo only colours a point
 it can actually see: points hidden behind nearer lidar points are skipped.
@@ -19,7 +19,6 @@ import sys
 
 import cv2
 import numpy as np
-import pycolmap
 
 import livox_room
 
@@ -32,51 +31,49 @@ def colour_points(xyz, photos, room_turn=None, buffer_scale=0.25, status=True):
     room_turn: if the points are in the wall-aligned frame written by livox_room.py,
     pass its rotation so they can be turned back first.
     """
-    rec = pycolmap.Reconstruction(os.path.join(photos, "sfm", "0"))
-    to_lidar = np.load(os.path.join(photos, "sfm_to_lidar.npy"))
-    scale = np.cbrt(np.linalg.det(to_lidar[:3, :3]))
-    to_sfm = np.linalg.inv(to_lidar)
+    cams = np.load(os.path.join(photos, "cameras.npz"))
+    f, cx, cy, k = cams["intrinsics"]            # SIMPLE_RADIAL
+    width, height = (int(v) for v in cams["size"])
+    scale = 1.0                                  # cameras.npz is already in metres
     pts = np.asarray(xyz, np.float64)
     if room_turn is not None:
         pts = pts @ room_turn            # rows: inverse of (x @ turn.T)
-    pts = pts @ to_sfm[:3, :3].T + to_sfm[:3, 3]
 
     total = np.zeros((len(pts), 3))
     weight = np.zeros(len(pts))
-    for image in sorted(rec.images.values(), key=lambda im: im.name):
-        cam = rec.cameras[image.camera_id]
-        f, cx, cy, k = cam.params                      # SIMPLE_RADIAL
-        pose = image.cam_from_world()
-        c = pts @ pose.rotation.matrix().T + pose.translation
+    for name, rotation, centre in zip(cams["names"], cams["rotations"], cams["centres"]):
+        name = str(name)
+        c = (pts - centre) @ rotation            # into the camera's axes
         z = c[:, 2]
         front = z > 0.05 / scale
         x, y = c[front, 0] / z[front], c[front, 1] / z[front]
         r2 = x * x + y * y
         u, v = f * x * (1 + k * r2) + cx, f * y * (1 + k * r2) + cy
-        inside = (u >= 0) & (u < cam.width - 1) & (v >= 0) & (v < cam.height - 1) & (r2 < 4)
+        inside = (u >= 0) & (u < width - 1) & (v >= 0) & (v < height - 1) & (r2 < 4)
         idx = np.flatnonzero(front)[inside]
         u, v, depth, r2 = u[inside], v[inside], z[idx], r2[inside]
 
         # Depth buffer from the lidar points themselves, at reduced resolution, to find what is hidden.
-        bw, bh = int(cam.width * buffer_scale), int(cam.height * buffer_scale)
-        bu, bv = (u * buffer_scale).astype(int), (v * buffer_scale).astype(int)
+        bw, bh = int(width * buffer_scale), int(height * buffer_scale)
+        bu = np.minimum((u * buffer_scale).astype(int), bw - 1)
+        bv = np.minimum((v * buffer_scale).astype(int), bh - 1)
         buf = np.full(bh * bw, np.inf)
         np.minimum.at(buf, bv * bw + bu, depth)
         buf = buf.reshape(bh, bw)
         buf = cv2.erode(buf, np.ones((5, 5), np.uint8))    # nearest depth in a 5x5 patch closes gaps between points
         visible = depth <= buf[bv, bu] * 1.04 + 0.08 / scale
 
-        picture = cv2.imread(os.path.join(photos, "images", image.name))
+        picture = cv2.imread(os.path.join(photos, "images", name))
         if picture is None:
             continue
-        if picture.shape[1] != cam.width:
-            picture = cv2.resize(picture, (cam.width, cam.height), interpolation=cv2.INTER_AREA)
+        if picture.shape[1] != width:
+            picture = cv2.resize(picture, (width, height), interpolation=cv2.INTER_AREA)
         sample = picture[v[visible].round().astype(int), u[visible].round().astype(int), ::-1]
         w = 1.0 / (1.0 + r2[visible]) ** 2                  # favour the photo's centre
         total[idx[visible]] += sample * w[:, None]
         weight[idx[visible]] += w
         if status:
-            sys.stdout.write("\r%s: coloured %d points   " % (image.name, visible.sum()))
+            sys.stdout.write("\r%s: coloured %d points   " % (name, visible.sum()))
             sys.stdout.flush()
     seen = weight > 0
     rgb = np.zeros((len(pts), 3), np.uint8)

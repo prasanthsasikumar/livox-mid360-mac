@@ -163,6 +163,17 @@ def level_rotation(xyz, max_tilt_deg=30.0):
     return np.eye(3), 0.0
 
 
+def computer_clock_offset(path, sample=500):
+    """Seconds to add to the lidar's own timestamps to get this computer's clock at recording time."""
+    gaps = []
+    for received, kind, data in rec.read_packets(path):
+        if kind == rec.KIND_POINTS and len(data) > lp.POINT_HEADER.size:
+            gaps.append(received - struct.unpack_from("<Q", data, 28)[0] * 1e-9)
+            if len(gaps) >= sample:
+                break
+    return float(np.percentile(gaps, 5))     # the least-delayed packets are the truest
+
+
 def thin(xyz, refl, voxel):
     """Keep one point per voxel."""
     keys = np.floor(xyz / voxel).astype(np.int64)
@@ -183,6 +194,7 @@ def main():
 
     odometry = (LioOdometry if args.method == "lio" else IcpOdometry)(path)
     chunks_xyz, chunks_refl, track = [], [], []
+    rotations, moments = [], []      # lidar orientation and lidar-clock time of every pose
     began = time.time()
     for i, (xyz, refl, stamps) in enumerate(frames(path)):
         if len(xyz) < 500:
@@ -199,6 +211,8 @@ def main():
         world, r = thin(world, r, MAP_VOXEL)
         chunks_xyz.append(world.astype(np.float32)); chunks_refl.append(r)
         track.append(pose[:3, 3].copy())
+        rotations.append(pose[:3, :3].copy())
+        moments.append(float(np.mean(stamps)))
         if i % 20 == 0:
             sys.stdout.write("\rframe %d, %.1f m moved  " % (i, np.linalg.norm(np.diff(track, axis=0), axis=1).sum()))
             sys.stdout.flush()
@@ -229,6 +243,11 @@ def main():
                  "property float z\nproperty uchar intensity\nend_header\n" % len(xyz)).encode())
         f.write(ply.tobytes())
     np.savetxt(base + "-path.csv", track, fmt="%.4f", delimiter=",", header="x,y,z", comments="")
+    # Full poses with times on this computer's clock, for lining up a camera that was recorded alongside.
+    rotations = np.array([level @ r for r in rotations]).reshape(len(track), 9)
+    times = np.array(moments) + computer_clock_offset(path)
+    np.savetxt(base + "-poses.csv", np.column_stack([times, track, rotations]), fmt="%.6f", delimiter=",",
+               header="time,x,y,z,r00,r01,r02,r10,r11,r12,r20,r21,r22", comments="")
 
     if len(xyz) > VIEWER_MAX_POINTS:
         pick = np.random.default_rng(0).choice(len(xyz), VIEWER_MAX_POINTS, replace=False)
