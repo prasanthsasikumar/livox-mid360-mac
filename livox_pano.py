@@ -25,6 +25,7 @@ import livox_room
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEAR = 0.45          # metres: points closer than this to the camera are the rig or the holder
+MATCH_NEAR = 1.5     # metres: nearer points (people, the desk the rig stands on) are left out of the matching
 FLOOR_CUT = -62.0    # degrees: below this the photo shows the rig itself
 SHUTTER_DELAY = 1.0  # seconds from trigger to exposure
 
@@ -57,7 +58,7 @@ def depth_buffer(u, v, rng, width, height, grow=5):
 def lidar_panorama(xyz, intensity, centre, mirror, width=1024, height=512):
     """Edge image of the lidar points as seen from `centre` (yaw 0), plus where the lidar has data."""
     lon, lat, rng = directions(xyz, centre, 0.0, mirror)
-    keep = (rng > NEAR) & (np.degrees(lat) > FLOOR_CUT)
+    keep = (rng > MATCH_NEAR) & (np.degrees(lat) > FLOOR_CUT)
     u, v = to_pixels(lon[keep], lat[keep], width, height)
     buf = depth_buffer(u, v, rng[keep], width, height, grow=3)
     front = rng[keep] <= buf[v, u] * 1.03 + 0.05
@@ -120,8 +121,9 @@ def calibrate(xyz, intensity, lidar_pos, photo):
                 if s > score:
                     score, best_off, shift = s, o, sh
                     off = best_off
-    # a shift of k columns means the photo is turned by k columns relative to the lidar panorama
-    yaw = 2 * np.pi * shift / width * (1 if mirror else -1)
+    # the photo matches the lidar panorama moved right by `shift` columns; turning the camera by yaw
+    # moves the panorama right by yaw/2pi*width (left when mirrored)
+    yaw = 2 * np.pi * shift / width * (-1 if mirror else 1)
     return {"mirror": bool(mirror), "offset": off.tolist(), "yaw": float(yaw), "score": float(score)}
 
 

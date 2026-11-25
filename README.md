@@ -52,6 +52,7 @@ the viewer, which you can skip with `--no-open`.
 | `livox_cloud.py` | Captures a few seconds with the lidar standing still and writes a 3D viewer, a `.ply` and a top-down `.png`. | standard library |
 | `livox_record.py` | Saves every raw point and motion-sensor packet to a file while you move the lidar. | standard library |
 | `livox_theta.py` | Takes 360 photos on a USB-connected RICOH THETA; `livox_record.py --theta` uses it. | `gphoto2` |
+| `livox_pano.py` | Paints a stitched cloud with the colours from the THETA's 360 photos. | `requirements.txt` |
 | `livox_stitch.py` | Works out how the lidar moved during a recording and merges all scans into one cloud. | `requirements.txt` |
 | `livox_room.py` | Crops a stitched cloud to the room the lidar was in, adds a flat floor, flattens walls and ceiling, removes stray points. | `requirements.txt` |
 | `livox_mesh.py` | Turns a cloud into a surface mesh and writes a mesh viewer. | `requirements.txt` |
@@ -264,9 +265,30 @@ camera's clock is set to the computer's each time it connects.
   sensor, so the horizon comes out straight either way.
 - Shooting happens in the background, so no lidar packets are lost while the camera works.
 
-Checked so far: a 20 s test recording on a desk with two 360 photos, no lidar packets dropped, and the
-stitched map level (floor and ceiling flat). Placing 360 photos in the scan and colouring from them is not done
-yet: step 7 only handles ordinary photos.
+### Colouring the cloud from the 360 photos
+
+```sh
+python3 livox_record.py --seconds 60 --theta --theta-every 15
+.venv/bin/python livox_stitch.py recordings/walk-<time>.lvraw
+.venv/bin/python livox_pano.py recordings/walk-<time>.lvraw
+```
+
+Each photo is placed where the lidar was when it was taken (the stitcher saves the lidar's path with times on
+the computer's clock), plus the camera's fixed offset on the rig. The THETA levels its photos and the map is
+level too, so the only unknowns are which way the camera faces and that offset. The first time, `livox_pano.py`
+finds them by lining up edges in the photo with edges in a panorama rendered from the lidar points, leaving out
+anything within 1.5 m (people, the desk), and saves them to `theta-calibration.json`. Later recordings reuse
+it; pass `--recalibrate` after changing how the camera is mounted.
+
+Each lidar point takes its colour from the photos that can see it (points hidden behind nearer points are
+skipped), favouring the nearest photo. Points within 0.45 m of the camera (the rig, the person holding it)
+and the bottom of the photo (where the rig itself is) are left out, and points no photo sees keep a grey from
+reflectivity.
+
+Checked so far: a 20 s recording on a desk with two 360 photos: no lidar packets dropped, the map level, the
+camera found 12 cm above the lidar, and 88% of the points coloured. Everything a photo saw from that one spot
+comes out in its real colours. A walking recording with a photo every few metres is next; it should colour
+the whole room.
 
 ## What to expect from the results
 
