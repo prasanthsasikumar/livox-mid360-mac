@@ -1,0 +1,6 @@
+# Only needed for livox_stitch.py, livox_room.py, livox_mesh.py and livox_view.py.
+# livox_probe.py, livox_cloud.py and livox_record.py use the Python standard library only.
+numpy
+kiss-icp
+rko_lio
+open3d

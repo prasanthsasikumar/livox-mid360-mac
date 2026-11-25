@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Livox Mid-360 room scan</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0b0d12; color: #cfd6e4; font: 16px/1.55 -apple-system, system-ui, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { color: #fff; font-size: 30px; margin: 0 0 8px; }
+  p.lead { margin: 0 0 32px; max-width: 62ch; }
+  .grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  a.card { display: block; background: #141824; border: 1px solid #262c3d; border-radius: 10px; overflow: hidden;
+    color: inherit; text-decoration: none; }
+  a.card:hover { border-color: #2f6fed; }
+  a.card img { display: block; width: 100%; aspect-ratio: 7 / 4; object-fit: cover; background: #000; }
+  a.card div { padding: 14px 16px 16px; }
+  a.card b { color: #fff; display: block; margin-bottom: 4px; }
+  a.card span { font-size: 14px; color: #9aa4b8; }
+  footer { margin-top: 32px; font-size: 14px; color: #9aa4b8; }
+  footer a { color: #8ab4ff; }
+</style></head><body><main>
+<h1>Livox Mid-360 room scan</h1>
+<p class="lead">A hall of about 10 m by 21.5 m, scanned in 75 seconds by moving a Livox Mid-360 lidar around
+a table top. Open a viewer, then drag to orbit, scroll to zoom and right-drag to pan. Each one downloads
+8&ndash;12 MB, so give it a moment.</p>
+<div class="grid">
+  <a class="card" href="room-mesh.html?ceiling=off"><img src="images/room-mesh-open.png" alt="Room mesh with the ceiling hidden">
+    <div><b>Room mesh</b><span>Cropped to the room, flat floor added, 350,000 triangles.</span></div></a>
+  <a class="card" href="room-cloud.html"><img src="images/room-cloud-top.png" alt="Room point cloud from above">
+    <div><b>Room point cloud</b><span>The cleaned cloud the mesh was built from, 600,000 points.</span></div></a>
+  <a class="card" href="cloud.html"><img src="images/cloud-orbit.png" alt="Full stitched point cloud coloured by height">
+    <div><b>Full stitched cloud</b><span>Everything the lidar saw, before cropping, 700,000 points.</span></div></a>
+</div>
+<footer>Scripts and write-up: <a href="https://github.com/prasanthsasikumar/livox-mid360-mac">github.com/prasanthsasikumar/livox-mid360-mac</a></footer>
+</main></body></html>
