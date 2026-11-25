@@ -3,6 +3,11 @@
 Small Python scripts that talk to a Livox Mid-360 lidar directly over Ethernet, with no Livox SDK and no ROS.
 They were written in one sitting on a MacBook to go from "is the sensor alive?" to a cleaned 3D mesh of a room.
 
+![The whole setup: a MacBook, an Ethernet adapter and the Mid-360 on a desk](docs/images/desk-setup.jpg)
+
+*The whole setup: a MacBook, a Thunderbolt-to-Ethernet adapter (centre) and the Mid-360 (front), powered from
+its own supply. No other hardware is involved.*
+
 **[Open the interactive 3D viewers](https://prasanthsasikumar.github.io/livox-mid360-mac/)** (drag to orbit, scroll to zoom).
 
 [![Room mesh with the ceiling hidden](docs/images/room-mesh-open.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/room-mesh.html?ceiling=off)
@@ -23,8 +28,6 @@ and tilting the lidar around a table top; the lidar never left the table area.
 | ![Top-down view](docs/images/stitched-top-down.png) | [![Room cloud from above](docs/images/room-cloud-top.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/room-cloud.html?view=top) |
 
 ## What you need
-
-![The whole setup: a MacBook, an Ethernet adapter and the Mid-360 on a desk](docs/images/desk-setup.jpg)
 
 - A Livox Mid-360, powered, connected to the computer by Ethernet (a USB or Thunderbolt adapter is fine).
 - The computer's wired port set to a fixed address on the lidar's network. The scripts assume `192.168.1.50`
