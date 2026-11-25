@@ -541,12 +541,14 @@ const $ = id => document.getElementById(id);
 const names = await (await fetch('/splat/list', { cache: 'no-store' })).json();
 const want = new URLSearchParams(location.search).get('file') || names[0];
 if (!names.length) { $('stat').textContent = 'no splat maps yet: press Map, walk, then Splat view'; }
-for (const n of names) $('pick').add(new Option(n.replace('-map-colour-splat.ply', ''), n, false, n === want));
+for (const n of names) $('pick').add(new Option(n.replace('-map-colour-splat.ply', '').replace('-splat.ply', ''), n, false, n === want));
 $('pick').onchange = e => { location.search = '?file=' + encodeURIComponent(e.target.value); };
 if (want) {
+  // trained splats look right only near where the photos were taken: start there if the splat says where
+  const start = await (await fetch('/scans/' + encodeURIComponent(want) + '.json', { cache: 'no-store' })).json();
   const viewer = new GS.Viewer({
     rootElement: $('view'), cameraUp: [0, 0, 1],
-    initialCameraPosition: [-5, -5, 4], initialCameraLookAt: [0, 0, 0],
+    initialCameraPosition: start.camera || [-5, -5, 4], initialCameraLookAt: start.look || [0, 0, 0],
     sharedMemoryForWorkers: false, gpuAcceleratedSort: false, antialiased: true,
     sceneRevealMode: GS.SceneRevealMode.Instant,
   });
@@ -623,6 +625,9 @@ def make_handler(lidar, feed, mapper=None, cal=None):
                 names = sorted((f for f in os.listdir(scans) if f.endswith("-splat.ply")),
                                key=lambda f: -os.path.getmtime(os.path.join(scans, f))) if os.path.isdir(scans) else []
                 self._send(json.dumps(names).encode(), "application/json")
+            elif path.startswith("/scans/") and path.endswith("-splat.ply.json"):
+                full = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans", os.path.basename(path))
+                self._send(open(full, "rb").read() if os.path.isfile(full) else b"{}", "application/json")
             elif path.startswith("/scans/") and path.endswith("-splat.ply"):
                 name = os.path.basename(path)                     # no directories: only files in scans/
                 full = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans", name)

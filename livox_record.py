@@ -22,6 +22,7 @@ import argparse
 import os
 import select
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -113,12 +114,20 @@ def main():
             return 1
         print("THETA %s ready, battery %s" % (theta_info["model"], theta_info["battery"]))
 
+    def cue(sound):
+        subprocess.Popen(["afplay", "/System/Library/Sounds/%s.aiff" % sound],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def theta_loop():
         # shoots in the background so lidar packets keep being read while the camera works
         n, next_shot = 0, time.time() + 1.0
         while not theta_stop.is_set():
             if time.time() >= next_shot:
                 photo = os.path.join(out_dir, "%s.theta-%02d.jpg" % (name, n))
+                # sound cues for walking captures: a tick when the shot starts (hold still), a chime when
+                # the exposure is over (move on; the download carries on in the background)
+                cue("Tink")
+                threading.Timer(2.5, cue, ("Glass",)).start()
                 try:
                     theta_info["photos"].append(theta.shoot(photo))
                     n += 1

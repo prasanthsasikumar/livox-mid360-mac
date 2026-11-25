@@ -11,3 +11,5 @@ phone-app/Local.xcconfig
 phone-app/*.xcodeproj/
 phone-app/build/
 phone-app/LidarCam/Info.plist
+splats/
+target/
