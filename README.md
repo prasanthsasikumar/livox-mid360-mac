@@ -312,8 +312,13 @@ its USB live-streaming mode by itself (press the camera's Mode button to get bac
   map size, the distance from the start, and a warning if tracking falls behind.
   The map is drawn as round discs a fixed size in metres (the **splat** slider, 5 cm by default), so
   neighbouring points overlap and surfaces look solid rather than dotted.
+  People walking past would leave streaks in a map that only ever adds points, so the map also removes
+  points that later scans see straight through (a return in the same direction, clearly further away, three
+  times). Still surfaces are never seen through and stay; the status line counts what was removed. Someone
+  who stands still long enough stays in the map until they move away.
 - **Reset map** starts again; **Save** writes `scans/live-<time>-map-colour.ply`, a viewer page, and
-  `-map-colour-splat.ply` (see below).
+  `-map-colour-splat.ply` (see below). **Splat view** saves and opens the cleaned-up map as a Gaussian splat
+  at `http://localhost:8360/splat` (which also lists earlier ones).
 - Open `http://localhost:8360/?colour=photo` or `?map=1` to start in that mode.
 
 The live video is 1920 × 960, so the colours are softer than from the 6720 × 3360 stills, and its lens seams
@@ -326,7 +331,7 @@ can show as a step in brightness. The video reaches the computer a little late; 
 .venv/bin/python livox_splat.py scans/live-<time>-map-colour.ply    # any photo-coloured cloud works
 ```
 
-Writes a `.ply` in the standard 3D Gaussian Splatting layout that splat viewers open, for example
+Drops stray points and smooths colour speckle (`--raw` keeps everything), then writes a `.ply` in the standard 3D Gaussian Splatting layout that splat viewers open, for example
 [SuperSplat](https://superspl.at/editor) (drag the file in). Each lidar point becomes one flat Gaussian lying on
 the surface (its normal from the nearest points), coloured from the photos and as wide as the gap to its
 neighbours. This is a starting splat, not a trained one: nothing is optimised against the photos yet, so it

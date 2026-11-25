@@ -249,6 +249,7 @@ PAGE = r"""<!doctype html>
         <button id="m-map" title="Track the rig and build a coloured map as you walk. Hold still for a second when starting.">Map</button>
         <button id="m-reset">Reset map</button>
         <button id="m-save" title="Write the coloured map to scans/ as .ply and a viewer page">Save</button>
+        <button id="m-splat" title="Save the map, clean it up, and open it as a Gaussian splat">Splat view</button>
         <label class="stat" title="Size of each map point, in centimetres">splat <input id="splat" type="range" min="1" max="12" step="0.5" value="5">
           <span id="splatv">5 cm</span></label>
         <span class="stat" id="mstat"></span>
@@ -334,13 +335,23 @@ const splatMat = new THREE.ShaderMaterial({
 const mapCloud = new THREE.Points(mgeo, splatMat); mapCloud.frustumCulled = false; mapCloud.visible = false; ls.add(mapCloud);
 const rig = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 8), new THREE.MeshBasicMaterial({ color: 0xff5533 }));
 rig.visible = false; ls.add(rig);
-let mapOn = false, mChunk = 0, mGen = 0, mCount = 0;
+let mapOn = false, mChunk = 0, mGen = 0, mCount = 0, mRem = 0;
 $('m-map').onclick = async () => {
   mapOn = !mapOn; $('m-map').classList.toggle('on', mapOn);
   mapCloud.visible = rig.visible = mapOn; cloud.visible = !mapOn;
   await fetch(mapOn ? '/map/start' : '/map/stop', { cache: 'no-store' });
 };
 $('splat').oninput = e => { splatMat.uniforms.uSize.value = e.target.value / 100; $('splatv').textContent = e.target.value + ' cm'; };
+$('m-splat').onclick = async () => {
+  const win = window.open('about:blank', '_blank');       // opened now, so the browser does not block it
+  $('mstat').textContent = 'making splat…';
+  const r = await (await fetch('/map/save', { cache: 'no-store' })).json();
+  if (!r.file) { $('mstat').textContent = 'nothing to save yet: press Map first'; if (win) win.close(); return; }
+  const name = r.file.split('/').pop().replace('.ply', '-splat.ply');
+  $('mstat').textContent = 'saved ' + name;
+  const url = '/splat?file=' + encodeURIComponent(name);
+  if (win) win.location = url; else location = url;
+};
 $('m-reset').onclick = () => fetch('/map/reset', { cache: 'no-store' });
 $('m-save').onclick = async () => {
   const r = await (await fetch('/map/save', { cache: 'no-store' })).json();
@@ -348,12 +359,13 @@ $('m-save').onclick = async () => {
 };
 async function pullMap() {
   if (mapOn) try {
-    const buf = await (await fetch(`/map?c=${mChunk}&g=${mGen}`, { cache: 'no-store' })).arrayBuffer();
-    const [n, chunk, gen] = new Uint32Array(buf, 0, 3);
-    const p = new Float32Array(buf, 12, 3);
-    if (gen !== mGen) { mCount = 0; mGen = gen; }
-    mChunk = chunk;
-    const xyz = new Float32Array(buf, 24, n * 3), rgb = new Uint8Array(buf, 24 + n * 12, n * 3);
+    const buf = await (await fetch(`/map?c=${mChunk}&g=${mGen}&r=${mRem}`, { cache: 'no-store' })).arrayBuffer();
+    const [n, chunk, gen, nrem, ngone] = new Uint32Array(buf, 0, 5);
+    const p = new Float32Array(buf, 20, 3);
+    if (gen !== mGen) { mCount = 0; mGen = gen; mRem = 0; }
+    mChunk = chunk; mRem = nrem;
+    const gone = new Uint32Array(buf, 32, ngone), at = 32 + ngone * 4;
+    const xyz = new Float32Array(buf, at, n * 3), rgb = new Uint8Array(buf, at + n * 12, n * 3);
     const m = Math.min(n, MAXM - mCount);
     mpos.set(xyz.subarray(0, m * 3), mCount * 3);
     for (let i = 0; i < m * 3; i++) mcol[mCount * 3 + i] = rgb[i] / 255;
@@ -363,6 +375,13 @@ async function pullMap() {
       a.needsUpdate = c.needsUpdate = true;
     }
     mCount += m; mgeo.setDrawRange(0, mCount);
+    if (ngone) {   // points the server removed (something that moved): send them far beyond the view
+      for (const i of gone) if (i < mCount) { mpos[i * 3] = mpos[i * 3 + 1] = mpos[i * 3 + 2] = 1e6; }
+      let lo = Infinity, hi = -1; for (const i of gone) { if (i < lo) lo = i; if (i > hi) hi = i; }
+      const a = mgeo.attributes.position;
+      if (hi >= 0 && a.addUpdateRange) a.addUpdateRange(lo * 3, (hi - lo + 1) * 3);
+      a.needsUpdate = true;
+    }
     rig.position.set(p[0], p[1], p[2]);
   } catch (e) {}
   setTimeout(pullMap, 300);
@@ -490,6 +509,60 @@ addEventListener('resize', resize); resize();
 </body></html>
 """
 
+SPLAT_PAGE = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Livox Splat</title>
+<style>
+  html, body { margin:0; height:100%; background:#0b0d12; color:#cfd6e4;
+    font:13px/1.4 -apple-system, system-ui, sans-serif; overflow:hidden; }
+  #view { position:absolute; inset:0; }
+  .hud { position:absolute; left:12px; top:10px; right:12px; z-index:10; display:flex; gap:8px;
+    align-items:center; flex-wrap:wrap; }
+  .hud b { color:#fff; }
+  .stat { color:#7d879c; }
+  select, a { background:#1b2030; color:#cfd6e4; border:1px solid #343b50; border-radius:6px;
+    padding:4px 9px; font:inherit; text-decoration:none; }
+</style>
+<script type="importmap">{"imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "@mkkellogg/gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js"}}</script>
+</head><body>
+<div id="view"></div>
+<div class="hud">
+  <b>Gaussian splat map</b>
+  <select id="pick"></select>
+  <a href="/">back to live</a>
+  <span class="stat" id="stat">loading…</span>
+</div>
+<script type="module">
+import * as GS from '@mkkellogg/gaussian-splats-3d';
+const $ = id => document.getElementById(id);
+const names = await (await fetch('/splat/list', { cache: 'no-store' })).json();
+const want = new URLSearchParams(location.search).get('file') || names[0];
+if (!names.length) { $('stat').textContent = 'no splat maps yet: press Map, walk, then Splat view'; }
+for (const n of names) $('pick').add(new Option(n.replace('-map-colour-splat.ply', ''), n, false, n === want));
+$('pick').onchange = e => { location.search = '?file=' + encodeURIComponent(e.target.value); };
+if (want) {
+  const viewer = new GS.Viewer({
+    rootElement: $('view'), cameraUp: [0, 0, 1],
+    initialCameraPosition: [-5, -5, 4], initialCameraLookAt: [0, 0, 0],
+    sharedMemoryForWorkers: false, gpuAcceleratedSort: false, antialiased: true,
+    sceneRevealMode: GS.SceneRevealMode.Instant,
+  });
+  const t0 = performance.now();
+  viewer.addSplatScene('/scans/' + encodeURIComponent(want), {
+    format: GS.SceneFormat.Ply, showLoadingUI: true, splatAlphaRemovalThreshold: 5,
+  }).then(() => {
+    viewer.start();
+    $('stat').textContent = 'drag to orbit · right-drag to pan · scroll to zoom · loaded in ' +
+      ((performance.now() - t0) / 1000).toFixed(1) + ' s';
+  }).catch(e => { $('stat').textContent = 'could not load: ' + e; });
+}
+</script>
+</body></html>
+"""
+
 
 def photo_colours(lidar, feed, mapper, cal, xyz_cm, refl):
     """RGB for the live points from the newest video frame; points the camera cannot see stay grey."""
@@ -536,9 +609,27 @@ def make_handler(lidar, feed, mapper=None, cal=None):
                 self._send(body, "application/octet-stream")
             elif path == "/map":
                 q = dict(kv.split("=") for kv in query.split("&") if "=" in kv)
-                chunk, gen, pose, xyz, rgb = mapper.since(int(q.get("c", 0)), int(q.get("g", 0)))
-                head = np.array([len(rgb), chunk, gen], np.uint32).tobytes() + pose.astype(np.float32).tobytes()
-                self._send(head + xyz.astype(np.float32).tobytes() + rgb.tobytes(), "application/octet-stream")
+                chunk, gen, pose, nrem, gone, xyz, rgb = mapper.since(int(q.get("c", 0)), int(q.get("g", 0)),
+                                                                     int(q.get("r", 0)))
+                # header: n new points, chunk, generation, removed so far, n removed here; pose; then the
+                # removed indices (uint32), new xyz (float32), new rgb (uint8)
+                head = np.array([len(rgb), chunk, gen, nrem, len(gone)], np.uint32).tobytes() + pose.astype(np.float32).tobytes()
+                self._send(head + gone.tobytes() + xyz.astype(np.float32).tobytes() + rgb.tobytes(),
+                           "application/octet-stream")
+            elif path == "/splat":
+                self._send(SPLAT_PAGE.encode(), "text/html; charset=utf-8")
+            elif path == "/splat/list":
+                scans = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans")
+                names = sorted((f for f in os.listdir(scans) if f.endswith("-splat.ply")),
+                               key=lambda f: -os.path.getmtime(os.path.join(scans, f))) if os.path.isdir(scans) else []
+                self._send(json.dumps(names).encode(), "application/json")
+            elif path.startswith("/scans/") and path.endswith("-splat.ply"):
+                name = os.path.basename(path)                     # no directories: only files in scans/
+                full = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans", name)
+                if os.path.isfile(full):
+                    self._send(open(full, "rb").read(), "application/octet-stream")
+                else:
+                    self.send_error(404)
             elif path == "/map/save":
                 saved = mapper.save(os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans")) if mapper else None
                 self._send(json.dumps({"file": saved}).encode(), "application/json")

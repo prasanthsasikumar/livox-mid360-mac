@@ -26,6 +26,13 @@ FRAME_SECONDS = 0.1
 MIN_RANGE, MAX_RANGE = 0.3, 60.0
 MAP_VOXEL = 0.03
 MAP_MAX_POINTS = 3_000_000
+# Moving things (people walking past) leave streaks in a map that only adds points. Each map point a later
+# scan sees straight through (a return in the same direction, clearly further away) gets a strike; at
+# CARVE_STRIKES strikes it is removed. Still surfaces are never seen through, so they stay.
+CARVE_EVERY = 3        # frames per check (0.3 s of points)
+CARVE_PIXEL = 1.0      # degrees per range-image pixel
+CARVE_RANGE = 25.0     # metres: only check map points this close to the rig
+CARVE_STRIKES = 3
 POINT_DTYPE = {1: (np.dtype([("x", "<i4"), ("y", "<i4"), ("z", "<i4"), ("r", "u1"), ("tag", "u1")]), 0.001),
                2: (np.dtype([("x", "<i2"), ("y", "<i2"), ("z", "<i2"), ("r", "u1"), ("tag", "u1")]), 0.01)}
 
@@ -158,6 +165,12 @@ class Mapper:
         with self.lock:
             self.chunks_xyz, self.chunks_rgb, self.count = [], [], 0
             self.voxels = set()
+            self.all_xyz = np.zeros((0, 3), np.float32)   # every map point by index, for carving
+            self.all_keys = np.zeros(0, np.int64)
+            self.alive = np.zeros(0, bool)
+            self._used = 0
+            self.strikes = np.zeros(0, np.uint8)
+            self.removed = []                              # indices removed so far, in order (sent to the page)
             self.pose = np.eye(4)
             self.track = []
             self.generation = getattr(self, "generation", 0) + 1
@@ -231,6 +244,7 @@ class Mapper:
         self._odometry = self._new_odometry()
         self.packets.clear()
         self.status = "mapping"
+        recent, carver = [], None
         for xyz, stamps, arrived in self._frames():
             if generation != self.generation:
                 return
@@ -267,12 +281,77 @@ class Mapper:
                     self.chunks_xyz.append(world[fresh].astype(np.float32))
                     self.chunks_rgb.append(rgb[fresh])
                     self.count += len(fresh)
+                    self._grow(world[fresh].astype(np.float32), keys[fresh])
                 self.pose = pose
                 self.track.append(pose[:3, 3].astype(np.float32))
+            recent.append(deskewed @ pose[:3, :3].T + pose[:3, 3])
+            if len(recent) >= CARVE_EVERY:
+                # on its own thread so tracking never waits; skipped if the last check is still running
+                if carver is None or not carver.is_alive():
+                    carver = threading.Thread(target=self._carve, args=(np.concatenate(recent), pose[:3, 3].copy(),
+                                                                         generation), daemon=True)
+                    carver.start()
+                recent = []
             behind = time.time() - arrived
-            self.status = "mapping · %.0fk points · %.1f m from start%s" % (
-                self.count / 1000, float(np.linalg.norm(pose[:3, 3])),
+            self.status = "mapping · %.0fk points · %.1f m from start · %d moved, removed%s" % (
+                self.count / 1000, float(np.linalg.norm(pose[:3, 3])), len(self.removed),
                 " · %.1f s behind" % behind if behind > 0.6 else "")
+
+    def _grow(self, xyz, keys):
+        """Append new map points to the carving arrays (called with the lock held)."""
+        n = self._used
+        if n + len(xyz) > len(self.alive):                 # grow capacity in big steps
+            cap = max(2 * len(self.alive), n + len(xyz), 65536)
+            for name, fill in (("all_xyz", 0), ("all_keys", 0), ("alive", False), ("strikes", 0)):
+                old = getattr(self, name)
+                new = np.zeros((cap,) + old.shape[1:], old.dtype)
+                new[:len(old)] = old
+                setattr(self, name, new)
+        self.all_xyz[self._used:self._used + len(xyz)] = xyz
+        self.all_keys[self._used:self._used + len(xyz)] = keys
+        self.alive[self._used:self._used + len(xyz)] = True
+        self._used += len(xyz)
+
+    def _carve(self, scan, origin, generation):
+        """Strike map points that this scan sees through; remove those with enough strikes."""
+        with self.lock:
+            used = self._used
+            pts = self.all_xyz[:used]
+            near = np.flatnonzero(self.alive[:used] & (np.abs(pts - origin.astype(np.float32)).max(1) < CARVE_RANGE))
+            cand = pts[near].astype(np.float64)
+        if not len(near):
+            return
+        w, h = int(round(360 / CARVE_PIXEL)), int(round(180 / CARVE_PIXEL))
+
+        def pixels(p):
+            d = p - origin
+            r = np.linalg.norm(d, axis=1)
+            u = ((np.arctan2(d[:, 1], d[:, 0]) + np.pi) / (2 * np.pi) * w).astype(int) % w
+            v = np.clip(((np.arcsin(np.clip(d[:, 2] / np.maximum(r, 1e-9), -1, 1)) + np.pi / 2) / np.pi * h).astype(int), 0, h - 1)
+            return u, v, r
+
+        su, sv, sr = pixels(scan)
+        ok = sr > NEAR + 0.2
+        img = np.full(w * h, np.inf, np.float32)
+        np.minimum.at(img, sv[ok] * w + su[ok], sr[ok].astype(np.float32))
+        img = cv2.erode(img.reshape(h, w), np.ones((3, 3), np.uint8))   # nearest return around each direction
+        cu, cv_, cr = pixels(cand)
+        seen = img[cv_, cu]
+        tol = np.maximum(0.2, 0.05 * cr)
+        through = np.isfinite(seen) & (seen > cr + tol) & (cr > NEAR + 0.3)
+        there = np.isfinite(seen) & (np.abs(seen - cr) < tol)
+        with self.lock:
+            if generation != self.generation:
+                return
+            idx_t, idx_h = near[through], near[there]
+            self.strikes[idx_t] = np.minimum(self.strikes[idx_t].astype(int) + 1, 255)
+            self.strikes[idx_h] = 0
+            gone = idx_t[self.strikes[idx_t] >= CARVE_STRIKES]
+            gone = gone[self.alive[gone]]
+            if len(gone):
+                self.alive[gone] = False
+                self.voxels.difference_update(self.all_keys[gone].tolist())   # the space can fill again later
+                self.removed.extend(gone.tolist())
 
     def save(self, out_dir):
         """Write the map as a coloured .ply (and a viewer page next to it). Returns the .ply path or None."""
@@ -283,22 +362,26 @@ class Mapper:
             if not self.chunks_xyz:
                 return None
             xyz, rgb = np.concatenate(self.chunks_xyz), np.concatenate(self.chunks_rgb)
+            alive = self.alive[:len(xyz)].copy()
+        xyz, rgb = xyz[alive], rgb[alive]
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, "live-%s-map-colour.ply" % time.strftime("%Y%m%d-%H%M%S"))
         livox_room.write_ply(path, xyz, np.zeros(len(xyz), np.uint8), rgb)
         subprocess.Popen([sys.executable, os.path.join(HERE, "livox_view.py"), path, "--no-open"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.Popen([sys.executable, os.path.join(HERE, "livox_splat.py"), path],   # -> <map>-splat.ply
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        import livox_splat
+        livox_splat.write_splat(os.path.splitext(path)[0] + "-splat.ply", xyz.astype(np.float64), rgb, status=False)
         return path
 
-    def since(self, chunk, generation):
-        """New map points after `chunk` (or all, if the map was reset since `generation`)."""
+    def since(self, chunk, generation, removed=0):
+        """New map points after `chunk` (or all, if the map was reset since `generation`), and the indices
+        of points removed after the first `removed`."""
         with self.lock:
             if generation != self.generation:
-                chunk = 0
+                chunk, removed = 0, 0
             xyz = self.chunks_xyz[chunk:]
             rgb = self.chunks_rgb[chunk:]
-            return (len(self.chunks_xyz), self.generation, self.pose[:3, 3].copy(),
+            gone = np.array(self.removed[removed:], np.uint32)
+            return (len(self.chunks_xyz), self.generation, self.pose[:3, 3].copy(), len(self.removed), gone,
                     np.concatenate(xyz) if xyz else np.zeros((0, 3), np.float32),
                     np.concatenate(rgb) if rgb else np.zeros((0, 3), np.uint8))
