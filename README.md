@@ -51,6 +51,7 @@ the viewer, which you can skip with `--no-open`.
 | `livox_probe.py` | Tells the lidar where to send data, starts it, and counts points and motion-sensor packets for a few seconds. A health check. | standard library |
 | `livox_cloud.py` | Captures a few seconds with the lidar standing still and writes a 3D viewer, a `.ply` and a top-down `.png`. | standard library |
 | `livox_record.py` | Saves every raw point and motion-sensor packet to a file while you move the lidar. | standard library |
+| `livox_theta.py` | Takes 360 photos on a USB-connected RICOH THETA; `livox_record.py --theta` uses it. | `gphoto2` |
 | `livox_stitch.py` | Works out how the lidar moved during a recording and merges all scans into one cloud. | `requirements.txt` |
 | `livox_room.py` | Crops a stitched cloud to the room the lidar was in, adds a flat floor, flattens walls and ceiling, removes stray points. | `requirements.txt` |
 | `livox_mesh.py` | Turns a cloud into a surface mesh and writes a mesh viewer. | `requirements.txt` |
@@ -98,6 +99,9 @@ How to move:
 - Changing height and tilting it gently (up to about 30°) is what lets it see the floor and fill the blind
   cone directly above it.
 - Finish where you started. The stitcher prints the start-to-end gap, which is then your drift.
+
+Add `--phone` to film on an iPhone at the same time, or `--theta` to take 360 photos on a RICOH THETA (see the
+rigs below).
 
 ### 4. Stitch
 
@@ -210,6 +214,44 @@ first launch.
 
 Checked so far: short combined recordings standing still (4K clip fetched, no lidar packets lost). A full
 walking capture with the rig has not been processed yet.
+
+## A handheld rig with a 360 camera
+
+The second rig drops the phone for a RICOH THETA Z1, which takes the whole sphere in one photo. Everything sits
+on one mini tripod: legs closed as the handle, a ball head, the Mid-360 on its side in a cage with the dome
+facing out, a second ball head, and the THETA on top.
+
+| The idea | As built |
+|---|---|
+| ![Sketch of the THETA rig](docs/images/theta-rig.png) | ![The THETA rig as built](docs/images/theta-rig-photo.jpg) |
+
+Turning the lidar on its side turns its 360° band upright, so it sees the floor and ceiling ahead as well as
+the walls, without having to tilt the rig. The stitcher levels the map from gravity measured during the
+stand-still at the start, so a sideways lidar still gives an upright map. The THETA, the ball heads and the
+tripod are inside the lidar's band at close range and show up as a small blob around the start of the path.
+
+```sh
+brew install gphoto2
+python3 livox_theta.py status                              # is the camera there?
+python3 livox_record.py --seconds 60 --theta               # one 360 photo at the start
+python3 livox_record.py --seconds 120 --theta --theta-every 15   # and one every 15 s
+```
+
+Photos land next to the recording as `walk-<time>.theta-00.jpg`, `-01.jpg` and so on (6720 × 3360,
+equirectangular), with a `.theta.json` giving the computer time each one was triggered and downloaded. The
+camera's clock is set to the computer's each time it connects.
+
+- Plug the THETA in by USB-C, switch it on, still-photo mode. macOS grabs any newly plugged camera for its own
+  photo import (`ptpcamerad`); the script stops that service before each command, and it restarts on its own.
+- A photo takes about 11 s from trigger to download, so `--theta-every` shorter than that just shoots back to
+  back. The exposure happens in the first second or two: pause while it shoots.
+- The THETA can sit tilted (to make room for the cable, say). It levels its own photos with its gravity
+  sensor, so the horizon comes out straight either way.
+- Shooting happens in the background, so no lidar packets are lost while the camera works.
+
+Checked so far: a 20 s test recording on a desk with two 360 photos, no lidar packets dropped, and the
+stitched map level (floor and ceiling flat). Placing 360 photos in the scan and colouring from them is not done
+yet: step 7 only handles ordinary photos.
 
 ## What to expect from the results
 
