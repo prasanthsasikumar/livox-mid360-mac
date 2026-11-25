@@ -249,6 +249,8 @@ PAGE = r"""<!doctype html>
         <button id="m-map" title="Track the rig and build a coloured map as you walk. Hold still for a second when starting.">Map</button>
         <button id="m-reset">Reset map</button>
         <button id="m-save" title="Write the coloured map to scans/ as .ply and a viewer page">Save</button>
+        <label class="stat" title="Size of each map point, in centimetres">splat <input id="splat" type="range" min="1" max="12" step="0.5" value="5">
+          <span id="splatv">5 cm</span></label>
         <span class="stat" id="mstat"></span>
       </div>
       <div class="err" id="lerr"></div>
@@ -309,7 +311,27 @@ const mpos = new Float32Array(MAXM * 3), mcol = new Float32Array(MAXM * 3);
 mgeo.setAttribute('position', new THREE.BufferAttribute(mpos, 3).setUsage(THREE.DynamicDrawUsage));
 mgeo.setAttribute('color', new THREE.BufferAttribute(mcol, 3).setUsage(THREE.DynamicDrawUsage));
 mgeo.setDrawRange(0, 0);
-const mapCloud = new THREE.Points(mgeo, mat); mapCloud.frustumCulled = false; mapCloud.visible = false; ls.add(mapCloud);
+// each map point drawn as a round disc a fixed size in metres (wider than the 3 cm map spacing),
+// so neighbouring discs overlap and surfaces read as solid instead of dotted
+const splatMat = new THREE.ShaderMaterial({
+  vertexColors: true,
+  uniforms: { uSize: { value: 0.05 }, uViewH: { value: 800 } },
+  vertexShader: `uniform float uSize; uniform float uViewH; varying vec3 vColor;
+    void main() {
+      vColor = color;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = clamp(uSize * uViewH * projectionMatrix[1][1] * 0.5 / max(-mv.z, 0.01), 1.5, 48.0);
+    }`,
+  fragmentShader: `varying vec3 vColor;
+    void main() {
+      vec2 d = gl_PointCoord * 2.0 - 1.0; float r2 = dot(d, d);
+      if (r2 > 1.0) discard;
+      gl_FragColor = vec4(vColor * (1.0 - 0.18 * r2), 1.0);
+      #include <colorspace_fragment>
+    }`,
+});
+const mapCloud = new THREE.Points(mgeo, splatMat); mapCloud.frustumCulled = false; mapCloud.visible = false; ls.add(mapCloud);
 const rig = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 8), new THREE.MeshBasicMaterial({ color: 0xff5533 }));
 rig.visible = false; ls.add(rig);
 let mapOn = false, mChunk = 0, mGen = 0, mCount = 0;
@@ -318,10 +340,11 @@ $('m-map').onclick = async () => {
   mapCloud.visible = rig.visible = mapOn; cloud.visible = !mapOn;
   await fetch(mapOn ? '/map/start' : '/map/stop', { cache: 'no-store' });
 };
+$('splat').oninput = e => { splatMat.uniforms.uSize.value = e.target.value / 100; $('splatv').textContent = e.target.value + ' cm'; };
 $('m-reset').onclick = () => fetch('/map/reset', { cache: 'no-store' });
 $('m-save').onclick = async () => {
   const r = await (await fetch('/map/save', { cache: 'no-store' })).json();
-  $('mstat').textContent = r.file ? 'saved ' + r.file.split('/').pop() : 'nothing to save yet';
+  $('mstat').textContent = r.file ? 'saved ' + r.file.split('/').pop() + ' (+ -splat.ply for splat viewers)' : 'nothing to save yet';
 };
 async function pullMap() {
   if (mapOn) try {
@@ -454,6 +477,7 @@ function resize() {
     const p = c.parentElement, w = p.clientWidth, h = p.clientHeight;
     r.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix();
   }
+  splatMat.uniforms.uViewH.value = lc.parentElement.clientHeight * devicePixelRatio;
 }
 addEventListener('resize', resize); resize();
 (function loop() {

@@ -53,6 +53,7 @@ the viewer, which you can skip with `--no-open`.
 | `livox_record.py` | Saves every raw point and motion-sensor packet to a file while you move the lidar. | standard library |
 | `livox_theta.py` | Takes 360 photos on a USB-connected RICOH THETA; `livox_record.py --theta` uses it. | `gphoto2` |
 | `livox_pano.py` | Paints a stitched cloud with the colours from the THETA's 360 photos. | `requirements.txt` |
+| `livox_splat.py` | Turn a photo-coloured cloud into a Gaussian splat `.ply` for splat viewers. | `requirements.txt` |
 | `livox_live.py` | Live browser view of the lidar and the THETA's video, with live colour and a coloured map built while you walk. | `requirements.txt`, `ffmpeg` |
 | `livox_stitch.py` | Works out how the lidar moved during a recording and merges all scans into one cloud. | `requirements.txt` |
 | `livox_room.py` | Crops a stitched cloud to the room the lidar was in, adds a flat floor, flattens walls and ceiling, removes stray points. | `requirements.txt` |
@@ -309,12 +310,28 @@ its USB live-streaming mode by itself (press the camera's Mode button to get bac
   0.1 s of points from the video frame taken at the same moment, and keeps one coloured point per 3 cm cube.
   Hold the rig still for a second when you press it: that sets which way is up. The status line shows the
   map size, the distance from the start, and a warning if tracking falls behind.
-- **Reset map** starts again; **Save** writes `scans/live-<time>-map-colour.ply` and a viewer page.
+  The map is drawn as round discs a fixed size in metres (the **splat** slider, 5 cm by default), so
+  neighbouring points overlap and surfaces look solid rather than dotted.
+- **Reset map** starts again; **Save** writes `scans/live-<time>-map-colour.ply`, a viewer page, and
+  `-map-colour-splat.ply` (see below).
 - Open `http://localhost:8360/?colour=photo` or `?map=1` to start in that mode.
 
 The live video is 1920 × 960, so the colours are softer than from the 6720 × 3360 stills, and its lens seams
 can show as a step in brightness. The video reaches the computer a little late; `--video-delay` (default
 0.25 s) lines the colours up with the points while moving.
+
+#### Gaussian splat export
+
+```sh
+.venv/bin/python livox_splat.py scans/live-<time>-map-colour.ply    # any photo-coloured cloud works
+```
+
+Writes a `.ply` in the standard 3D Gaussian Splatting layout that splat viewers open, for example
+[SuperSplat](https://superspl.at/editor) (drag the file in). Each lidar point becomes one flat Gaussian lying on
+the surface (its normal from the nearest points), coloured from the photos and as wide as the gap to its
+neighbours. This is a starting splat, not a trained one: nothing is optimised against the photos yet, so it
+is as sharp as the coloured cloud, no sharper. Training it (gsplat, nerfstudio) from the posed THETA frames
+is the next step, and it needs a GPU.
 
 Checked so far, with the rig standing on a desk: photo colour lines up with the video (the calibration from
 the stills holds on the live video to within 1°), the coloured map builds in real time at about 70% of one

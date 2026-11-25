@@ -288,6 +288,8 @@ class Mapper:
         livox_room.write_ply(path, xyz, np.zeros(len(xyz), np.uint8), rgb)
         subprocess.Popen([sys.executable, os.path.join(HERE, "livox_view.py"), path, "--no-open"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen([sys.executable, os.path.join(HERE, "livox_splat.py"), path],   # -> <map>-splat.ply
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return path
 
     def since(self, chunk, generation):
