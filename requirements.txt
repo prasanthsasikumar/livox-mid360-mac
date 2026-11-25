@@ -6,3 +6,4 @@ rko_lio
 open3d
 pycolmap
 opencv-python-headless
+scipy
