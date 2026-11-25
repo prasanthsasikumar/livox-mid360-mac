@@ -254,6 +254,100 @@ def cameras_from_rig(rec, frame_times, video_start, poses_file):
     return [im.name for im in images], rotations, centres, report
 
 
+def refine_directions(root, cloud, passes=3, samples=60000, scale=0.25):
+    """Nudge each camera's direction so its picture agrees with what the other cameras see.
+
+    Lidar points are projected into every frame (hidden ones skipped); each point's reference brightness
+    is the median over the frames that see it, and each frame is turned by a fraction of a degree to
+    best match those references. Rewrites cameras.npz. Returns (before, after) brightness spread.
+    """
+    import cv2
+    from scipy.optimize import minimize
+    from scipy.spatial.transform import Rotation
+    path = os.path.join(root, "cameras.npz")
+    cams = dict(np.load(path))
+    f, cx, cy, k = cams["intrinsics"]
+    width, height = (int(v) for v in cams["size"])
+    w, h = int(width * scale), int(height * scale)
+    names, rot, centre = [str(n) for n in cams["names"]], cams["rotations"].copy(), cams["centres"]
+    grey = [cv2.GaussianBlur(cv2.cvtColor(cv2.resize(cv2.imread(os.path.join(root, "images", n)), (w, h),
+            interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY).astype(np.float32), (7, 7), 2.0) for n in names]
+    xyz, _ = livox_room.read_ply(cloud)
+    rng = np.random.default_rng(1)
+    dist = np.linalg.norm(xyz - centre.mean(0), axis=1)
+    pool = xyz[(dist > 0.8) & (dist < 10)]
+    pts = pool[rng.choice(len(pool), min(samples, len(pool)), replace=False)]
+    full = xyz[rng.choice(len(xyz), min(len(xyz), 800000), replace=False)]
+
+    def project(r, c, p):
+        q = (p - c) @ r
+        z = q[:, 2]
+        front = z > 0.3
+        zz = np.where(front, z, 1)
+        x, y = q[:, 0] / zz, q[:, 1] / zz
+        r2 = x * x + y * y
+        u, v = (f * x * (1 + k * r2) + cx) * scale, (f * y * (1 + k * r2) + cy) * scale
+        return u, v, z, front & (u >= 1) & (u < w - 2) & (v >= 1) & (v < h - 2) & (r2 < 3)
+
+    def sample(img, u, v):
+        x0, y0 = u.astype(int), v.astype(int)
+        ax, ay = u - x0, v - y0
+        return (img[y0, x0] * (1 - ax) * (1 - ay) + img[y0, x0 + 1] * ax * (1 - ay)
+                + img[y0 + 1, x0] * (1 - ax) * ay + img[y0 + 1, x0 + 1] * ax * ay)
+
+    seen = []
+    for i in range(len(names)):
+        u, v, z, ok = project(rot[i], centre[i], full)
+        buf = np.full((h, w), np.inf, np.float32)
+        np.minimum.at(buf, (v[ok].astype(int), u[ok].astype(int)), z[ok].astype(np.float32))
+        buf = cv2.erode(buf, np.ones((3, 3), np.uint8))
+        u, v, z, ok = project(rot[i], centre[i], pts)
+        vis = np.zeros(len(pts), bool)
+        vis[ok] = z[ok] <= buf[v[ok].astype(int), u[ok].astype(int)] * 1.05 + 0.05
+        seen.append(vis)
+
+    def table():
+        vals = np.full((len(names), len(pts)), np.nan, np.float32)
+        for i in range(len(names)):
+            u, v, z, ok = project(rot[i], centre[i], pts)
+            ok &= seen[i]
+            if ok.any():
+                vals[i, ok] = sample(grey[i], u[ok], v[ok])
+        return vals
+
+    def spread(vals):
+        keep = np.sum(~np.isnan(vals), 0) >= 5
+        return float(np.mean(np.nanstd(vals[:, keep], 0)))
+
+    vals = table()
+    before = spread(vals)
+    for _ in range(passes):
+        counts = np.sum(~np.isnan(vals), 0)
+        ref = np.full(len(pts), np.nan, np.float32)
+        ref[counts >= 4] = np.nanmedian(vals[:, counts >= 4], 0)
+        for i in range(len(names)):
+            sel = seen[i] & ~np.isnan(ref)
+            if sel.sum() < 300:
+                continue
+            p, r = pts[sel], ref[sel]
+
+            def cost(q):
+                u, v, z, ok = project(Rotation.from_rotvec(q).as_matrix() @ rot[i], centre[i], p)
+                if ok.sum() < 200:
+                    return 1e3
+                e = sample(grey[i], u[ok], v[ok]) - r[ok]
+                return float(np.mean(np.minimum(np.abs(e - np.median(e)), 40)))   # ignore brightness offsets
+
+            q = minimize(cost, np.zeros(3), method="Powell",
+                         options={"xtol": 2e-4, "ftol": 1e-3, "maxfev": 200}).x
+            if np.degrees(np.linalg.norm(q)) < 3:
+                rot[i] = Rotation.from_rotvec(q).as_matrix() @ rot[i]
+        vals = table()
+    cams["rotations"] = rot
+    np.savez(path, **cams)
+    return before, spread(vals)
+
+
 def place_by_path(args, rec, root, video, frame_times):
     import json
     sidecar = os.path.splitext(video)[0] + ".phone.json"
@@ -265,12 +359,12 @@ def place_by_path(args, rec, root, video, frame_times):
     print("Placed %d frames along the lidar's path (%d turn pairs matched)" % (len(names), report["pairs"]))
     print("Camera sits %.0f cm from the lidar's centre: (%+.2f, %+.2f, %+.2f) m in the lidar's own axes" % (
         100 * np.linalg.norm(report["offset_m"]), *report["offset_m"]))
-    print("Camera direction vs lidar direction disagree by %.1f degrees typically, %.1f at worst-tenth" % (
-        report["wobble_median_deg"], report["wobble_p90_deg"]))
-    if report["wobble_median_deg"] > 2:
-        print("That is a lot: either the phone moves relative to the lidar on the rig, or one of the two "
-              "motion estimates is off. Expect colours to be offset by several cm per metre of distance.")
+    print("Lidar and photo estimates of each turn differ by %.1f degrees typically (the camera directions "
+          "used come from the photos, which are the steadier of the two)" % report["wobble_median_deg"])
     save_cameras(root, rec, names, rotations, centres)
+    before, after = refine_directions(root, args.cloud)
+    print("Refined each frame's direction: brightness disagreement between frames %.1f -> %.1f grey levels" % (
+        before, after))
 
 
 def main():

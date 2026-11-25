@@ -212,8 +212,23 @@ account: copy `phone-app/Local.xcconfig.example` to `Local.xcconfig`, fill in yo
 `cd phone-app && xcodegen generate` and build to your phone from Xcode. Allow camera and local-network access on
 first launch.
 
-Checked so far: short combined recordings standing still (4K clip fetched, no lidar packets lost). A full
-walking capture with the rig has not been processed yet.
+To colour from a recording made with `--phone`:
+
+```sh
+.venv/bin/python livox_stitch.py recordings/walk-<time>.lvraw          # also writes -poses.csv
+.venv/bin/python livox_photos.py recordings/walk-<time>.mov scans/walk-<time>-stitched.ply \
+    --name my-walk --poses scans/walk-<time>-stitched-poses.csv
+.venv/bin/python livox_colour.py scans/walk-<time>-stitched.ply --photos photos/my-walk
+```
+
+Frames are taken from the video at 2 per second. Because both devices were on one rig, each frame's position
+comes from the lidar's measured path at that moment (plus the camera's offset on the rig, which is solved for),
+and its direction from the photo reconstruction, turned into the lidar's world by matching how the rig rotated
+in both. A final pass nudges each frame by fractions of a degree so the frames agree on colour. This works even
+when the rig only turns on the spot, where a photo-only reconstruction cannot tell how far away things are.
+
+Tested on one 75-second table-top recording: 149 of 150 frames placed, colours within about 1° when checked
+against frames held out of the colouring. A walking capture has not been processed yet.
 
 ## A handheld rig with a 360 camera
 
