@@ -9,6 +9,9 @@ page). The THETA is put into its USB live-streaming mode, where macOS sees it as
 the page shows it as MJPEG (Chrome opens the THETA's webcam stream but never gets a frame). Press the
 camera's Mode button to get back to photo mode for `livox_record.py --theta`.
 
+Photo colour paints the live points with the THETA's video, and Map builds a coloured map while you walk
+(see livox_livemap.py; both need theta-calibration.json from livox_pano.py).
+
 Only one program can receive the lidar's points at a time: stop this before running livox_record.py.
 """
 import argparse
@@ -23,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 
+import livox_livemap
 import livox_probe as lp
 
 POINT_DTYPE = {1: (np.dtype([("x", "<i4"), ("y", "<i4"), ("z", "<i4"), ("r", "u1"), ("tag", "u1")]), 0.1),
@@ -37,7 +41,10 @@ class Lidar:
         self.lock = threading.Lock()
         self.rate = 0.0
         self.imu = None
+        self.up = None        # low-passed acceleration direction: 'up' in lidar coordinates while still
         self.error = None
+        self.on_packet = None  # callbacks for the mapper
+        self.on_imu = None
 
     def start(self):
         socks = []
@@ -79,6 +86,8 @@ class Lidar:
             p = p[(p["x"] != 0) | (p["y"] != 0) | (p["z"] != 0)]
             xyz = (np.stack([p["x"], p["y"], p["z"]], axis=1) * to_cm).astype(np.int16)
             now = time.time()
+            if self.on_packet:
+                self.on_packet(now, data)
             with self.lock:
                 self.packets.append((now, xyz, p["r"].copy()))
                 while self.packets and self.packets[0][0] < now - MAX_WINDOW:
@@ -91,7 +100,12 @@ class Lidar:
         while True:
             data = self.imu_sock.recv(2048)
             if len(data) >= 60:
-                self.imu = [round(v, 4) for v in np.frombuffer(data[36:60], "<f4").tolist()]
+                values = np.frombuffer(data[36:60], "<f4").astype(float)
+                self.imu = [round(v, 4) for v in values.tolist()]
+                acc = values[3:6]
+                self.up = acc if self.up is None else 0.98 * self.up + 0.02 * acc
+                if self.on_imu:
+                    self.on_imu(acc)
 
     def snapshot(self, seconds):
         cutoff = time.time() - seconds
@@ -130,6 +144,7 @@ class ThetaFeed:
                     "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"]
         self.size = size
         self.jpeg, self.seq, self.fps, self.error = None, 0, 0.0, None
+        self.frames = livox_livemap.Frames()   # recent frames with arrival times, for colouring
         self.cond = threading.Condition()
 
     def start(self):
@@ -163,6 +178,7 @@ class ThetaFeed:
                     with self.cond:
                         self.jpeg, self.seq, self.error = buf[a:b + 2], self.seq + 1, None
                         self.cond.notify_all()
+                    self.frames.add(time.time(), self.jpeg)
                     buf = buf[b + 2:]
                     count += 1
                 now = time.time()
@@ -221,12 +237,19 @@ PAGE = r"""<!doctype html>
         <button id="c-height" class="on">Height</button>
         <button id="c-refl">Reflectivity</button>
         <button id="c-dist">Distance</button>
+        <button id="c-photo" title="Colour the points from the THETA's live video">Photo</button>
         <button id="v-top">Top</button>
         <button id="v-side">Orbit</button>
         <button id="level" class="on" title="Rotate the cloud so gravity (from the lidar's IMU) points down">Level</button>
         <label class="stat">window <input id="win" type="range" min="0.1" max="3" step="0.1" value="0.5">
           <span id="winv">0.5 s</span></label>
         <label class="stat">dot <input id="dot" type="range" min="1" max="6" step="0.5" value="2"></label>
+      </div>
+      <div class="row">
+        <button id="m-map" title="Track the rig and build a coloured map as you walk. Hold still for a second when starting.">Map</button>
+        <button id="m-reset">Reset map</button>
+        <button id="m-save" title="Write the coloured map to scans/ as .ply and a viewer page">Save</button>
+        <span class="stat" id="mstat"></span>
       </div>
       <div class="err" id="lerr"></div>
     </div>
@@ -274,9 +297,54 @@ const turbo = t => [ // polynomial fit of the Turbo colour map
   0.10667330 + t * (12.64194608 + t * (-60.58204836 + t * (110.36276771 + t * (-89.90310912 + t * 27.34824973))))
 ].map(v => Math.min(1, Math.max(0, v)));
 const LUT = Array.from({ length: 256 }, (_, i) => turbo(i / 255));
-for (const k of ['height', 'refl', 'dist']) $('c-' + k).onclick = () => {
-  colourBy = k; for (const j of ['height', 'refl', 'dist']) $('c-' + j).classList.toggle('on', j === k);
+const MODES = ['height', 'refl', 'dist', 'photo'];
+for (const k of MODES) $('c-' + k).onclick = () => {
+  colourBy = k; for (const j of MODES) $('c-' + j).classList.toggle('on', j === k);
 };
+
+// ---------- coloured map (built on the server while the rig moves) ----------
+const MAXM = 3000000;
+const mgeo = new THREE.BufferGeometry();
+const mpos = new Float32Array(MAXM * 3), mcol = new Float32Array(MAXM * 3);
+mgeo.setAttribute('position', new THREE.BufferAttribute(mpos, 3).setUsage(THREE.DynamicDrawUsage));
+mgeo.setAttribute('color', new THREE.BufferAttribute(mcol, 3).setUsage(THREE.DynamicDrawUsage));
+mgeo.setDrawRange(0, 0);
+const mapCloud = new THREE.Points(mgeo, mat); mapCloud.frustumCulled = false; mapCloud.visible = false; ls.add(mapCloud);
+const rig = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 8), new THREE.MeshBasicMaterial({ color: 0xff5533 }));
+rig.visible = false; ls.add(rig);
+let mapOn = false, mChunk = 0, mGen = 0, mCount = 0;
+$('m-map').onclick = async () => {
+  mapOn = !mapOn; $('m-map').classList.toggle('on', mapOn);
+  mapCloud.visible = rig.visible = mapOn; cloud.visible = !mapOn;
+  await fetch(mapOn ? '/map/start' : '/map/stop', { cache: 'no-store' });
+};
+$('m-reset').onclick = () => fetch('/map/reset', { cache: 'no-store' });
+$('m-save').onclick = async () => {
+  const r = await (await fetch('/map/save', { cache: 'no-store' })).json();
+  $('mstat').textContent = r.file ? 'saved ' + r.file.split('/').pop() : 'nothing to save yet';
+};
+async function pullMap() {
+  if (mapOn) try {
+    const buf = await (await fetch(`/map?c=${mChunk}&g=${mGen}`, { cache: 'no-store' })).arrayBuffer();
+    const [n, chunk, gen] = new Uint32Array(buf, 0, 3);
+    const p = new Float32Array(buf, 12, 3);
+    if (gen !== mGen) { mCount = 0; mGen = gen; }
+    mChunk = chunk;
+    const xyz = new Float32Array(buf, 24, n * 3), rgb = new Uint8Array(buf, 24 + n * 12, n * 3);
+    const m = Math.min(n, MAXM - mCount);
+    mpos.set(xyz.subarray(0, m * 3), mCount * 3);
+    for (let i = 0; i < m * 3; i++) mcol[mCount * 3 + i] = rgb[i] / 255;
+    if (m > 0) {
+      const a = mgeo.attributes.position, c = mgeo.attributes.color;
+      a.addUpdateRange ? a.addUpdateRange(mCount * 3, m * 3) : 0; c.addUpdateRange ? c.addUpdateRange(mCount * 3, m * 3) : 0;
+      a.needsUpdate = c.needsUpdate = true;
+    }
+    mCount += m; mgeo.setDrawRange(0, mCount);
+    rig.position.set(p[0], p[1], p[2]);
+  } catch (e) {}
+  setTimeout(pullMap, 300);
+}
+pullMap();
 $('v-top').onclick = () => { lcam.position.set(0, -0.01, 18); lctl.target.set(0, 0, 0); };
 $('v-side').onclick = () => { lcam.position.set(-8, -8, 7); lctl.target.set(0, 0, 0); };
 $('win').oninput = e => $('winv').textContent = (+e.target.value).toFixed(1) + ' s';
@@ -294,14 +362,18 @@ function applyLevel(imu) {
 
 async function pull() {
   try {
-    const r = await fetch('/points?s=' + $('win').value, { cache: 'no-store' });
+    if (mapOn) { setTimeout(pull, 200); return; }
+    const photo = colourBy === 'photo';
+    const r = await fetch('/points?s=' + $('win').value + (photo ? '&rgb=1' : ''), { cache: 'no-store' });
     const buf = await r.arrayBuffer();
-    const n = Math.min(new Uint32Array(buf, 0, 1)[0], MAXP);
+    const total = new Uint32Array(buf, 0, 1)[0], n = Math.min(total, MAXP);
     const xyz = new Int16Array(buf, 4, n * 3);
-    const refl = new Uint8Array(buf, 4 + n * 6, n);
+    const refl = new Uint8Array(buf, 4 + total * 6, n);
+    const rgb = photo ? new Uint8Array(buf, 4 + total * 7, n * 3) : null;
     for (let i = 0; i < n; i++) {
       const x = xyz[3 * i] / 100, y = xyz[3 * i + 1] / 100, z = xyz[3 * i + 2] / 100;
       pos[3 * i] = x; pos[3 * i + 1] = y; pos[3 * i + 2] = z;
+      if (rgb) { col[3 * i] = rgb[3 * i] / 255; col[3 * i + 1] = rgb[3 * i + 1] / 255; col[3 * i + 2] = rgb[3 * i + 2] / 255; continue; }
       let t;
       if (colourBy === 'height') t = (z + 1.5) / 4;
       else if (colourBy === 'refl') t = Math.min(1, refl[i] / 150);
@@ -324,10 +396,18 @@ async function stats() {
       if (s.imu) { const [, , , ax, ay, az] = s.imu; t += ' · |a| ' + Math.hypot(ax, ay, az).toFixed(2) + ' g'; }
       $('lstat').textContent = t;
       applyLevel(s.imu);
+      $('mstat').textContent = s.map === 'off' ? '' : s.map;
+      $('c-photo').disabled = !s.calibrated;
+      if (!s.calibrated) $('c-photo').title = 'needs theta-calibration.json (run livox_pano.py once)';
     }
   } catch (e) {}
   setTimeout(stats, 250);
 }
+// ?colour=photo|height|refl|dist  ?map=1  ?view=top|orbit
+const opts = new URLSearchParams(location.search);
+if (opts.get('colour') && $('c-' + opts.get('colour'))) $('c-' + opts.get('colour')).onclick();
+if (opts.get('view') === 'top') $('v-top').onclick();
+if (opts.get('map') === '1') $('m-map').onclick();
 pull(); stats();
 
 // ---------- THETA ----------
@@ -387,7 +467,22 @@ addEventListener('resize', resize); resize();
 """
 
 
-def make_handler(lidar, feed):
+def photo_colours(lidar, feed, mapper, cal, xyz_cm, refl):
+    """RGB for the live points from the newest video frame; points the camera cannot see stay grey."""
+    grey = (40 + 215 * (np.minimum(refl, 160) / 160.0) ** 0.6).astype(np.uint8)
+    rgb = np.repeat(grey[:, None], 3, axis=1)
+    up = lidar.up if lidar is not None else None
+    if mapper is not None and mapper.status.startswith("mapping"):
+        up = mapper.pose[:3, :3].T @ np.array([0.0, 0.0, 1.0])
+    if cal is None or feed is None or up is None or not len(refl):
+        return rgb
+    image = feed.frames.at(time.time())
+    colours, seen = livox_livemap.colour_points(xyz_cm.astype(np.float64) / 100.0, image, cal, up)
+    rgb[seen] = colours[seen]
+    return rgb
+
+
+def make_handler(lidar, feed, mapper=None, cal=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -411,8 +506,33 @@ def make_handler(lidar, feed):
                 except ValueError:
                     secs = 0.5
                 xyz, refl = lidar.snapshot(secs) if lidar else (np.zeros((0, 3), np.int16), np.zeros(0, np.uint8))
-                self._send(np.uint32(len(refl)).tobytes() + xyz.tobytes() + refl.tobytes(),
-                           "application/octet-stream")
+                body = np.uint32(len(refl)).tobytes() + xyz.tobytes() + refl.tobytes()
+                if "rgb=1" in query:
+                    body += photo_colours(lidar, feed, mapper, cal, xyz, refl).tobytes()
+                self._send(body, "application/octet-stream")
+            elif path == "/map":
+                q = dict(kv.split("=") for kv in query.split("&") if "=" in kv)
+                chunk, gen, pose, xyz, rgb = mapper.since(int(q.get("c", 0)), int(q.get("g", 0)))
+                head = np.array([len(rgb), chunk, gen], np.uint32).tobytes() + pose.astype(np.float32).tobytes()
+                self._send(head + xyz.astype(np.float32).tobytes() + rgb.tobytes(), "application/octet-stream")
+            elif path == "/map/save":
+                saved = mapper.save(os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans")) if mapper else None
+                self._send(json.dumps({"file": saved}).encode(), "application/json")
+            elif path in ("/map/start", "/map/stop", "/map/reset"):
+                if mapper is None or lidar is None:
+                    self.send_error(404)
+                    return
+                if path == "/map/start":
+                    mapper.start()
+                elif path == "/map/stop":
+                    mapper.stop()
+                else:
+                    was = mapper.running
+                    mapper.stop()
+                    mapper.reset()
+                    if was:
+                        mapper.start()
+                self._send(b"{}", "application/json")
             elif path == "/theta.mjpg":
                 if feed is None:
                     self.send_error(404)
@@ -439,6 +559,8 @@ def make_handler(lidar, feed):
                     s["error"] = lidar.error
                 else:
                     s.update(rate=lidar.rate, imu=lidar.imu)
+                s["map"] = mapper.status if mapper else "off"
+                s["calibrated"] = cal is not None
                 self._send(json.dumps(s).encode(), "application/json")
             else:
                 self.send_error(404)
@@ -453,7 +575,12 @@ def main():
     ap.add_argument("--no-lidar", action="store_true")
     ap.add_argument("--no-theta", action="store_true", help="lidar only")
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--video-delay", type=float, default=0.25,
+                    help="seconds the THETA's live video lags behind real time (lines up map colours while moving)")
     args = ap.parse_args()
+    cal = livox_livemap.load_calibration()
+    if cal is None:
+        print("No theta-calibration.json: run livox_pano.py once on a --theta recording to enable photo colour.")
 
     lidar = None
     if not args.no_lidar:
@@ -470,8 +597,13 @@ def main():
         feed = ThetaFeed()
         feed.start()
 
+    mapper = None
+    if lidar is not None:
+        mapper = livox_livemap.Mapper(feed.frames if feed else livox_livemap.Frames(), cal, args.video_delay)
+        lidar.on_packet, lidar.on_imu = mapper.feed_packet, mapper.feed_imu
+
     ThreadingHTTPServer.daemon_threads = True
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(lidar, feed))
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(lidar, feed, mapper, cal))
     url = "http://localhost:%d" % args.port
     print("Live view at %s  (Ctrl-C to stop)" % url)
     if not args.no_open:

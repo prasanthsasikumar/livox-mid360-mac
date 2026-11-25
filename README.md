@@ -53,6 +53,7 @@ the viewer, which you can skip with `--no-open`.
 | `livox_record.py` | Saves every raw point and motion-sensor packet to a file while you move the lidar. | standard library |
 | `livox_theta.py` | Takes 360 photos on a USB-connected RICOH THETA; `livox_record.py --theta` uses it. | `gphoto2` |
 | `livox_pano.py` | Paints a stitched cloud with the colours from the THETA's 360 photos. | `requirements.txt` |
+| `livox_live.py` | Live browser view of the lidar and the THETA's video, with live colour and a coloured map built while you walk. | `requirements.txt`, `ffmpeg` |
 | `livox_stitch.py` | Works out how the lidar moved during a recording and merges all scans into one cloud. | `requirements.txt` |
 | `livox_room.py` | Crops a stitched cloud to the room the lidar was in, adds a flat floor, flattens walls and ceiling, removes stray points. | `requirements.txt` |
 | `livox_mesh.py` | Turns a cloud into a surface mesh and writes a mesh viewer. | `requirements.txt` |
@@ -290,6 +291,35 @@ Checked so far: a 20 s recording on a desk with two 360 photos: no lidar packets
 camera found 12 cm above the lidar, and 88% of the points coloured. Everything a photo saw from that one spot
 comes out in its real colours. A walking recording with a photo every few metres is next; it should colour
 the whole room.
+
+### Live: coloured points and a coloured map while you walk
+
+```sh
+.venv/bin/python livox_live.py          # opens http://localhost:8360
+```
+
+The page shows the lidar on the left and the THETA's live 360 video on the right. It switches the THETA into
+its USB live-streaming mode by itself (press the camera's Mode button to get back to photos for
+`livox_record.py --theta`).
+
+- **Photo** colours the live lidar points from the newest video frame, using `theta-calibration.json` (run
+  `livox_pano.py` once to make it). Points the camera cannot see, or that are hidden behind nearer points, stay
+  grey.
+- **Map** tracks the rig as it moves (KISS-ICP, the same points-only method as `livox_stitch.py`), colours each
+  0.1 s of points from the video frame taken at the same moment, and keeps one coloured point per 3 cm cube.
+  Hold the rig still for a second when you press it: that sets which way is up. The status line shows the
+  map size, the distance from the start, and a warning if tracking falls behind.
+- **Reset map** starts again; **Save** writes `scans/live-<time>-map-colour.ply` and a viewer page.
+- Open `http://localhost:8360/?colour=photo` or `?map=1` to start in that mode.
+
+The live video is 1920 × 960, so the colours are softer than from the 6720 × 3360 stills, and its lens seams
+can show as a step in brightness. The video reaches the computer a little late; `--video-delay` (default
+0.25 s) lines the colours up with the points while moving.
+
+Checked so far, with the rig standing on a desk: photo colour lines up with the video (the calibration from
+the stills holds on the live video to within 1°), the coloured map builds in real time at about 70% of one
+CPU core, and Save writes a viewable map. Not yet checked: a walk, and the right `--video-delay` (turn on the
+spot with Map on: if colours smear sideways, adjust it).
 
 ## What to expect from the results
 
