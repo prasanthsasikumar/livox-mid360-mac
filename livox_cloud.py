@@ -43,6 +43,7 @@ VIEWER = """<!doctype html>
 </head><body>
 <div id="hud"><b>__TITLE__</b> &middot; __COUNT__ points &middot; drag to orbit, scroll to zoom, right-drag to pan
   <div>
+    <button id="c-photo" hidden>Colour: photo</button>
     <button id="c-height" class="on">Colour: height</button>
     <button id="c-refl">Colour: reflectivity</button>
     <button id="v-top">Top view</button>
@@ -54,6 +55,7 @@ VIEWER = """<!doctype html>
 </div>
 <script id="xyz" type="application/octet-stream">__XYZ__</script>
 <script id="refl" type="application/octet-stream">__REFL__</script>
+<script id="rgb" type="application/octet-stream">__RGB__</script>
 <script type="module">
 window.addEventListener('error', e => document.getElementById('err').textContent = e.message);
 import * as THREE from 'three';
@@ -62,6 +64,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 const bytes = id => Uint8Array.from(atob(document.getElementById(id).textContent), c => c.charCodeAt(0));
 const pos = new Float32Array(bytes('xyz').buffer);
 const refl = bytes('refl');
+const rgb = bytes('rgb');   // empty unless the cloud was coloured from photos
 const n = refl.length, zLo = __ZLO__, zHi = __ZHI__;
 
 const ramp = [[48,18,59],[70,107,227],[27,207,212],[98,252,108],[210,233,53],[254,155,45],[219,56,7],[122,4,3]];
@@ -73,12 +76,14 @@ function turbo(t, out, i) {
 const col = new Float32Array(n * 3);
 function colour(mode) {
   for (let i = 0; i < n; i++) {
-    if (mode === 'height') turbo((pos[i * 3 + 2] - zLo) / (zHi - zLo), col, i * 3);
+    if (mode === 'photo') { for (let c = 0; c < 3; c++) col[i * 3 + c] = Math.pow(rgb[i * 3 + c] / 255, 2.2); }
+    else if (mode === 'height') turbo((pos[i * 3 + 2] - zLo) / (zHi - zLo), col, i * 3);
     else { const v = 0.12 + 0.88 * Math.pow(Math.min(refl[i], 160) / 160, 0.6); col[i*3] = col[i*3+1] = col[i*3+2] = v; }
   }
   geo.attributes.color.needsUpdate = true;
   document.getElementById('c-height').classList.toggle('on', mode === 'height');
-  document.getElementById('c-refl').classList.toggle('on', mode !== 'height');
+  document.getElementById('c-refl').classList.toggle('on', mode === 'refl');
+  document.getElementById('c-photo').classList.toggle('on', mode === 'photo');
 }
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -109,7 +114,8 @@ function resize() {
 }
 const params = new URLSearchParams(location.search);   // ?view=top|in|orbit  &colour=height|refl
 addEventListener('resize', resize); resize();
-view(params.get('view') || 'orbit'); colour(params.get('colour') || 'height');
+if (rgb.length) { document.getElementById('c-photo').hidden = false; document.getElementById('c-photo').onclick = () => colour('photo'); }
+view(params.get('view') || 'orbit'); colour(params.get('colour') || (rgb.length ? 'photo' : 'height'));
 document.getElementById('c-height').onclick = () => colour('height');
 document.getElementById('c-refl').onclick = () => colour('refl');
 document.getElementById('v-top').onclick = () => view('top');
@@ -236,7 +242,7 @@ def main():
             .replace("__ZLO__", "%.3f" % box[2][0]).replace("__ZHI__", "%.3f" % box[2][1])
             .replace("__RADIUS__", "%.3f" % half)
             .replace("__XYZ__", base64.b64encode(xyz.tobytes()).decode())
-            .replace("__REFL__", base64.b64encode(refl.tobytes()).decode()))
+            .replace("__REFL__", base64.b64encode(refl.tobytes()).decode()).replace("__RGB__", ""))
     with open(base + ".html", "w") as f:
         f.write(html)
 

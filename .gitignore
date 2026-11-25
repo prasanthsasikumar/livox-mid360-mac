@@ -5,3 +5,4 @@ __pycache__/
 # raw recordings and generated scans are large; the web-sized viewers live in docs/
 recordings/
 scans/
+photos/

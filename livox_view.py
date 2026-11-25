@@ -25,9 +25,11 @@ def main():
     args = ap.parse_args()
 
     xyz, refl = livox_room.read_ply(args.cloud)
+    rgb = livox_room.read_ply_rgb(args.cloud)
     if len(xyz) > args.max_points:
         pick = np.random.default_rng(0).choice(len(xyz), args.max_points, replace=False)
         xyz, refl = xyz[pick], refl[pick]
+        rgb = rgb[pick] if rgb is not None else None
     out = args.output or os.path.splitext(args.cloud)[0] + ".html"
     title = args.title or os.path.splitext(os.path.basename(out))[0]
     z_lo, z_hi = np.percentile(xyz[:, 2], [1, 99])
@@ -35,7 +37,8 @@ def main():
     html = (livox_cloud.VIEWER.replace("__TITLE__", title).replace("__COUNT__", "{:,}".format(len(xyz)))
             .replace("__ZLO__", "%.3f" % z_lo).replace("__ZHI__", "%.3f" % z_hi).replace("__RADIUS__", "%.3f" % radius)
             .replace("__XYZ__", base64.b64encode(np.ascontiguousarray(xyz, np.float32).tobytes()).decode())
-            .replace("__REFL__", base64.b64encode(np.ascontiguousarray(refl, np.uint8).tobytes()).decode()))
+            .replace("__REFL__", base64.b64encode(np.ascontiguousarray(refl, np.uint8).tobytes()).decode())
+            .replace("__RGB__", "" if rgb is None else base64.b64encode(np.ascontiguousarray(rgb, np.uint8).tobytes()).decode()))
     with open(out, "w") as f:
         f.write(html)
     print("Wrote %s (%s points)" % (out, "{:,}".format(len(xyz))))

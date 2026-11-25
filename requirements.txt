@@ -4,3 +4,5 @@ numpy
 kiss-icp
 rko_lio
 open3d
+pycolmap
+opencv-python-headless

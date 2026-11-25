@@ -20,6 +20,8 @@ and tilting the lidar around a table top; the lidar never left the table area.
 
 ## What you need
 
+![The whole setup: a MacBook, an Ethernet adapter and the Mid-360 on a desk](docs/images/desk-setup.jpg)
+
 - A Livox Mid-360, powered, connected to the computer by Ethernet (a USB or Thunderbolt adapter is fine).
 - The computer's wired port set to a fixed address on the lidar's network. The scripts assume `192.168.1.50`
   for the computer and `192.168.1.119` for the lidar; pass `--host` and `--lidar` if yours differ. A factory
@@ -46,6 +48,8 @@ the viewer, which you can skip with `--no-open`.
 | `livox_room.py` | Crops a stitched cloud to the room the lidar was in, adds a flat floor, flattens walls and ceiling, removes stray points. | `requirements.txt` |
 | `livox_mesh.py` | Turns a cloud into a surface mesh and writes a mesh viewer. | `requirements.txt` |
 | `livox_view.py` | Makes a point-cloud viewer from any `.ply` these scripts wrote. | `requirements.txt` |
+| `livox_photos.py` | Works out where a set of ordinary photos was taken inside a stitched cloud. | `requirements.txt` |
+| `livox_colour.py` | Paints the lidar points with the colours from those photos. | `requirements.txt` |
 
 ### 1. Check the sensor
 
@@ -126,6 +130,27 @@ size. `--close` additionally fills in the ceiling and all four walls, covering r
 
 Poisson surface reconstruction with Open3D, trimmed back to where there are real points, with small loose
 pieces removed. The viewer has a "Hide ceiling" button for looking into the room from above.
+
+### 7. Colour from photos (optional)
+
+```sh
+.venv/bin/python livox_photos.py "~/Downloads/office images" scans/<name>-stitched.ply --name office
+.venv/bin/python livox_colour.py scans/<name>-stitched.ply --photos photos/office
+```
+
+The lidar has no camera, so colour comes from separate photos, here 26 iPhone ultra-wide shots.
+`livox_photos.py` reconstructs the camera positions from the photos alone with
+[COLMAP](https://colmap.github.io/) (about 10 minutes for 26 photos), then fits that reconstruction onto the
+lidar cloud: up from the floor, scale from an assumed camera height of 1–2 m, heading and position by sliding
+one floor plan over the other, then a fine 3D fit. It prints how good the fit is; in the example 68% of the
+photo points landed within 8 cm of a lidar surface.
+
+`livox_colour.py` then projects every lidar point into every photo and takes the colour, skipping points that
+are hidden behind nearer ones. Points no photo sees stay grey. The viewer gains a "Colour: photo" button.
+
+Photo tips: heavy overlap between neighbouring shots, one lens and no zoom changes, even light, and some floor
+in view. Walking around gives the best coverage; a handheld spin on the spot also worked here, and colours
+only what is visible from that spot (54% of the points in the example).
 
 ## What to expect from the results
 

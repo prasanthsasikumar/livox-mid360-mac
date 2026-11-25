@@ -241,7 +241,7 @@ def main():
             .replace("__ZLO__", "%.3f" % z_lo).replace("__ZHI__", "%.3f" % z_hi)
             .replace("__RADIUS__", "%.3f" % radius)
             .replace("__XYZ__", base64.b64encode(np.ascontiguousarray(vx, np.float32).tobytes()).decode())
-            .replace("__REFL__", base64.b64encode(np.ascontiguousarray(vr, np.uint8).tobytes()).decode()))
+            .replace("__REFL__", base64.b64encode(np.ascontiguousarray(vr, np.uint8).tobytes()).decode()).replace("__RGB__", ""))
     with open(base + ".html", "w") as f:
         f.write(html)
     print("Wrote %s.html, .ply, -path.csv" % base)

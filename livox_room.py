@@ -30,19 +30,38 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PLY_DTYPE = [("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("intensity", "u1")]
 
 
-def read_ply(path):
+def _load_ply(path):
     raw = open(path, "rb").read()
-    body = raw[raw.index(b"end_header\n") + 11:]
-    data = np.frombuffer(body, dtype=PLY_DTYPE)
+    end = raw.index(b"end_header\n") + 11
+    names = [line.split()[-1] for line in raw[:end].decode().splitlines() if line.startswith("property")]
+    dtype = PLY_DTYPE + ([("red", "u1"), ("green", "u1"), ("blue", "u1")] if "red" in names else [])
+    return np.frombuffer(raw[end:], dtype=dtype)
+
+
+def read_ply(path):
+    """(xyz, intensity) from a cloud .ply written by these scripts."""
+    data = _load_ply(path)
     return np.stack([data["x"], data["y"], data["z"]], axis=1).astype(np.float64), data["intensity"].copy()
 
 
-def write_ply(path, xyz, intensity):
-    out = np.empty(len(xyz), dtype=PLY_DTYPE)
+def read_ply_rgb(path):
+    """Photo colours (N x 3 uint8) if the cloud has them, else None."""
+    data = _load_ply(path)
+    if "red" not in data.dtype.names:
+        return None
+    return np.stack([data["red"], data["green"], data["blue"]], axis=1)
+
+
+def write_ply(path, xyz, intensity, rgb=None):
+    dtype = PLY_DTYPE + ([("red", "u1"), ("green", "u1"), ("blue", "u1")] if rgb is not None else [])
+    out = np.empty(len(xyz), dtype=dtype)
     out["x"], out["y"], out["z"], out["intensity"] = xyz[:, 0], xyz[:, 1], xyz[:, 2], intensity
+    props = "property float x\nproperty float y\nproperty float z\nproperty uchar intensity\n"
+    if rgb is not None:
+        out["red"], out["green"], out["blue"] = rgb[:, 0], rgb[:, 1], rgb[:, 2]
+        props += "property uchar red\nproperty uchar green\nproperty uchar blue\n"
     with open(path, "wb") as f:
-        f.write(("ply\nformat binary_little_endian 1.0\nelement vertex %d\nproperty float x\nproperty float y\n"
-                 "property float z\nproperty uchar intensity\nend_header\n" % len(xyz)).encode())
+        f.write(("ply\nformat binary_little_endian 1.0\nelement vertex %d\n%send_header\n" % (len(xyz), props)).encode())
         f.write(out.tobytes())
 
 
