@@ -14,6 +14,10 @@ and tilting the lidar around a table top; the lidar never left the table area.
 |---|---|
 | [![Stitched point cloud](docs/images/cloud-orbit.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/cloud.html) | [![Inside the mesh](docs/images/room-mesh-inside.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/room-mesh.html?view=in) |
 
+| Coloured from 26 iPhone photos | Seen from above |
+|---|---|
+| [![Photo-coloured cloud from inside](docs/images/colour-cloud-in.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/colour-cloud.html?view=in) | [![Photo-coloured cloud from above](docs/images/colour-cloud-orbit.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/colour-cloud.html) |
+
 | Top-down density of the stitched cloud | Cleaned room cloud from above |
 |---|---|
 | ![Top-down view](docs/images/stitched-top-down.png) | [![Room cloud from above](docs/images/room-cloud-top.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/room-cloud.html?view=top) |
@@ -147,6 +151,12 @@ photo points landed within 8 cm of a lidar surface.
 
 `livox_colour.py` then projects every lidar point into every photo and takes the colour, skipping points that
 are hidden behind nearer ones. Points no photo sees stay grey. The viewer gains a "Colour: photo" button.
+
+The example photo set is in `photos/office/images`, with its reconstruction in `photos/office/sfm` and the
+fitted placement in `photos/office/sfm_to_lidar.npy`. The full coloured result (2.9 million points with RGB) is
+`examples/office-colour.ply`, which opens in CloudCompare or MeshLab, or with `livox_view.py`.
+
+![The 26 photos used for colour](docs/images/photo-set.jpg)
 
 Photo tips: heavy overlap between neighbouring shots, one lens and no zoom changes, even light, and some floor
 in view. Walking around gives the best coverage; a handheld spin on the spot also worked here, and colours
