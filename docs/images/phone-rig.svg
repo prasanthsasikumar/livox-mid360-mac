@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" width="1200" height="780" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="dome" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3b6ea8"/><stop offset="0.55" stop-color="#1c2f4d"/><stop offset="1" stop-color="#6b5a2a"/>
+    </linearGradient>
+    <marker id="dot" markerWidth="8" markerHeight="8" refX="4" refY="4"><circle cx="4" cy="4" r="3" fill="#2f6fed"/></marker>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c7772b"/></marker>
+  </defs>
+  <rect width="1200" height="780" fill="#f6f7f9"/>
+  <text x="40" y="52" font-size="28" font-weight="700" fill="#141824">Handheld rig: Livox Mid-360 + iPhone 17 Pro</text>
+  <text x="40" y="82" font-size="16" fill="#566074">Front view. Both are clamped to one rigid handle and recorded in a single slow walk.</text>
+
+  <!-- lidar field of view -->
+  <ellipse cx="420" cy="232" rx="300" ry="46" fill="none" stroke="#c7772b" stroke-width="2" stroke-dasharray="7 7"/>
+  <path d="M 700 214 A 300 46 0 0 1 716 240" fill="none" stroke="#c7772b" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="100" y="150" font-size="15" fill="#9a5a1c">lidar sees 360° around,</text>
+  <text x="100" y="169" font-size="15" fill="#9a5a1c">from just below level to 52° up</text>
+
+  <!-- handle / pole -->
+  <rect x="408" y="270" width="24" height="330" rx="6" fill="#3a4152"/>
+  <rect x="398" y="560" width="44" height="150" rx="20" fill="#20242e"/>
+  <g stroke="#3a4152" stroke-width="3"><line x1="402" y1="600" x2="438" y2="600"/><line x1="402" y1="622" x2="438" y2="622"/><line x1="402" y1="644" x2="438" y2="644"/><line x1="402" y1="666" x2="438" y2="666"/></g>
+
+  <!-- top plate + lidar -->
+  <rect x="350" y="262" width="140" height="12" rx="4" fill="#59627a"/>
+  <rect x="368" y="196" width="104" height="68" rx="10" fill="#b9bfca" stroke="#8a92a3" stroke-width="2"/>
+  <g stroke="#8a92a3" stroke-width="3"><line x1="378" y1="212" x2="378" y2="256"/><line x1="390" y1="212" x2="390" y2="256"/><line x1="450" y1="212" x2="450" y2="256"/><line x1="462" y1="212" x2="462" y2="256"/></g>
+  <path d="M 384 200 A 36 44 0 0 1 456 200 Z" fill="url(#dome)" stroke="#16223a" stroke-width="2"/>
+  <text x="420" y="250" font-size="11" text-anchor="middle" fill="#4a5264" font-weight="700">LIVOX</text>
+
+  <!-- phone clamp + phone (landscape, back facing viewer) -->
+  <rect x="300" y="420" width="240" height="14" rx="5" fill="#59627a"/>
+  <rect x="292" y="330" width="12" height="104" rx="4" fill="#59627a"/>
+  <rect x="536" y="330" width="12" height="104" rx="4" fill="#59627a"/>
+  <rect x="304" y="338" width="232" height="112" rx="18" fill="#d9d4cb" stroke="#9c958a" stroke-width="2"/>
+  <rect x="312" y="346" width="72" height="96" rx="14" fill="#c9c3b8" stroke="#9c958a" stroke-width="1.5"/>
+  <circle cx="334" cy="370" r="13" fill="#11151c"/><circle cx="334" cy="370" r="6" fill="#2b3a55"/>
+  <circle cx="334" cy="418" r="13" fill="#11151c"/><circle cx="334" cy="418" r="6" fill="#2b3a55"/>
+  <circle cx="366" cy="394" r="13" fill="#11151c"/><circle cx="366" cy="394" r="6" fill="#2b3a55"/>
+  <circle cx="368" cy="362" r="4" fill="#f1e9c9"/><circle cx="368" cy="428" r="4" fill="#3a3f4a"/>
+
+  <!-- cable from lidar to backpack -->
+  <path d="M 472 240 C 560 250, 600 330, 640 420 S 760 560, 842 548" fill="none" stroke="#20242e" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- backpack with laptop and power bank -->
+  <rect x="820" y="380" width="300" height="300" rx="34" fill="#e3e6ec" stroke="#aab1bf" stroke-width="2"/>
+  <path d="M 900 380 C 900 330, 1040 330, 1040 380" fill="none" stroke="#aab1bf" stroke-width="10"/>
+  <text x="970" y="418" font-size="15" text-anchor="middle" fill="#566074">backpack</text>
+  <rect x="852" y="440" width="150" height="100" rx="8" fill="#9aa1ae" stroke="#737b8c" stroke-width="2"/>
+  <rect x="862" y="450" width="130" height="72" rx="3" fill="#20242e"/>
+  <text x="927" y="492" font-size="14" text-anchor="middle" fill="#cfd6e4">MacBook</text>
+  <rect x="836" y="540" width="182" height="10" rx="4" fill="#737b8c"/>
+  <rect x="1026" y="474" width="66" height="34" rx="6" fill="#c7772b"/>
+  <text x="1059" y="496" font-size="12" text-anchor="middle" fill="#fff">adapter</text>
+  <rect x="852" y="580" width="140" height="62" rx="10" fill="#2a3040"/>
+  <text x="922" y="608" font-size="14" text-anchor="middle" fill="#cfd6e4">power bank</text>
+  <text x="922" y="628" font-size="12" text-anchor="middle" fill="#9aa4b8">12 V output</text>
+  <path d="M 842 548 C 880 560, 990 560, 1040 508" fill="none" stroke="#20242e" stroke-width="4"/>
+  <path d="M 842 548 C 830 590, 840 606, 852 610" fill="none" stroke="#a33" stroke-width="4"/>
+  <path d="M 1026 492 L 1002 492" stroke="#20242e" stroke-width="4"/>
+
+  <!-- labels -->
+  <g font-size="16" fill="#141824">
+    <line x1="456" y1="186" x2="520" y2="130" stroke="#2f6fed" stroke-width="1.5" marker-start="url(#dot)"/>
+    <text x="526" y="126" font-weight="700">Livox Mid-360</text>
+    <text x="526" y="146" font-size="14" fill="#566074">on top, nothing blocking its view; keep hands below it</text>
+
+    <line x1="306" y1="372" x2="262" y2="352" stroke="#2f6fed" stroke-width="1.5" marker-start="url(#dot)"/>
+    <text x="256" y="336" text-anchor="end" font-weight="700">iPhone 17 Pro, landscape</text>
+    <text x="256" y="356" text-anchor="end" font-size="14" fill="#566074">cameras face forward (towards you here)</text>
+    <text x="256" y="374" text-anchor="end" font-size="14" fill="#566074">4K video, 1x lens, exposure, focus</text>
+    <text x="256" y="392" text-anchor="end" font-size="14" fill="#566074">and white balance locked</text>
+
+    <line x1="298" y1="428" x2="262" y2="462" stroke="#2f6fed" stroke-width="1.5" marker-start="url(#dot)"/>
+    <text x="256" y="470" text-anchor="end" font-weight="700">Rigid phone clamp</text>
+    <text x="256" y="490" text-anchor="end" font-size="14" fill="#566074">no wobble relative to the lidar</text>
+
+    <line x1="398" y1="636" x2="330" y2="660" stroke="#2f6fed" stroke-width="1.5" marker-start="url(#dot)"/>
+    <text x="324" y="666" text-anchor="end" font-weight="700">Handle</text>
+    <text x="324" y="686" text-anchor="end" font-size="14" fill="#566074">hold here, at chest height or above</text>
+
+    <line x1="700" y1="512" x2="730" y2="600" stroke="#2f6fed" stroke-width="1.5" marker-start="url(#dot)"/>
+    <text x="560" y="622" font-weight="700">One cable from the lidar</text>
+    <text x="560" y="642" font-size="14" fill="#566074">splits into Ethernet (data, to the</text>
+    <text x="560" y="660" font-size="14" fill="#566074">adapter) and power (red, 12 V)</text>
+  </g>
+
+  <text x="40" y="748" font-size="14" fill="#566074">No sync wiring: the phone frames are placed in the lidar scan afterwards by matching what they see. Sketch, not to scale.</text>
+</svg>

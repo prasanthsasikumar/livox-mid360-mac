@@ -165,6 +165,26 @@ Photo tips: heavy overlap between neighbouring shots, one lens and no zoom chang
 in view. Walking around gives the best coverage; a handheld spin on the spot also worked here, and colours
 only what is visible from that spot (54% of the points in the example).
 
+## A handheld rig with a phone
+
+For colour, the lidar and a phone go on one handle: lidar on top with a clear view all round, phone in
+landscape below it, one cable down to the computer and a 12 V supply.
+
+| The idea | Built from a mini tripod, a phone clamp and two ball heads |
+|---|---|
+| ![Sketch of the handheld rig](docs/images/phone-rig.png) | ![The rig as built](docs/images/rig-photo.jpg) |
+
+There is no sync wiring. The phone's pictures are placed in the lidar scan afterwards by matching what they
+see (step 7), so the phone only has to stay put and take sharp pictures. Things that matter:
+
+- Nothing may stick up beside the lidar's dome, and the phone and clamp stay below its base.
+- Route the cable behind the handle so it stays out of the phone's pictures, and tie it down.
+- The lidar's body is its heat sink: leave the fins open, and print any adapter in PETG or ABS, not PLA.
+- Lock the phone's exposure, focus and white balance, and turn off stabilisation modes that crop the picture.
+
+This rig has been checked standing still (lidar streaming, phone visible to the Mac as a camera). A full
+walking capture with it has not been processed yet.
+
 ## What to expect from the results
 
 - Walls, floor, ceiling and large furniture come out well and to scale.
