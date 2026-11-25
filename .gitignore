@@ -7,3 +7,7 @@ recordings/
 scans/
 # photo sets are kept; the COLMAP feature database is large and rebuildable
 photos/**/db.db
+phone-app/Local.xcconfig
+phone-app/*.xcodeproj/
+phone-app/build/
+phone-app/LidarCam/Info.plist

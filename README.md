@@ -182,8 +182,34 @@ see (step 7), so the phone only has to stay put and take sharp pictures. Things 
 - The lidar's body is its heat sink: leave the fins open, and print any adapter in PETG or ABS, not PLA.
 - Lock the phone's exposure, focus and white balance, and turn off stabilisation modes that crop the picture.
 
-This rig has been checked standing still (lidar streaming, phone visible to the Mac as a camera). A full
-walking capture with it has not been processed yet.
+### Triggering the phone from the computer
+
+`phone-app/` is LidarCam, a small iPhone app that records 4K video and is driven from the computer, so nobody
+has to touch the phone on the rig:
+
+```sh
+python3 livox_record.py --seconds 75 --phone
+```
+
+That starts the phone and the lidar together, stops both, and downloads the clip into `recordings/` next to the
+lidar file, with a `.phone.json` holding the camera settings and the clock difference between phone and
+computer (measured to a few hundredths of a second), so video frames can be matched to lidar time.
+
+- The app locks white balance and exposure, uses a shutter of 1/200 s or faster when the light allows, turns
+  stabilisation off, tags the video the right way up for however the phone is mounted, and keeps the screen on.
+- `--lens ultrawide` (default) sees the most and is sharp at every distance, so focus is locked. `--lens wide`
+  gives more detail but has a shallow depth of field indoors, so it keeps autofocusing.
+- Phone and computer must be on the same Wi-Fi with the app open. If the phone is out of range when the
+  recording ends, the clip stays on the phone; `python3 livox_phone.py stop` and `fetch` collect it later.
+- `livox_phone.py` also works on its own: `status`, `start NAME`, `stop`, `list`, `fetch FILE`.
+
+To build the app you need Xcode, [XcodeGen](https://github.com/yonaskolb/XcodeGen) and an Apple developer
+account: copy `phone-app/Local.xcconfig.example` to `Local.xcconfig`, fill in your team and a bundle id, then
+`cd phone-app && xcodegen generate` and build to your phone from Xcode. Allow camera and local-network access on
+first launch.
+
+Checked so far: short combined recordings standing still (4K clip fetched, no lidar packets lost). A full
+walking capture with the rig has not been processed yet.
 
 ## What to expect from the results
 

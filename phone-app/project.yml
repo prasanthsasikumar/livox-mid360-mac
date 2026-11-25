@@ -1,0 +1,47 @@
+name: LidarCam
+options:
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Local.xcconfig
+  Release: Local.xcconfig
+targets:
+  LidarCam:
+    type: application
+    platform: iOS
+    sources: [LidarCam]
+    configFiles:
+      Debug: Local.xcconfig
+      Release: Local.xcconfig
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_KEY_CFBundleDisplayName: LidarCam
+        INFOPLIST_KEY_NSCameraUsageDescription: Records video for merging with lidar scans.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Lets the computer running the lidar start and stop recording and fetch the video.
+        INFOPLIST_KEY_NSMotionUsageDescription: Records which way up the phone is mounted.
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+    info:
+      path: LidarCam/Info.plist
+      properties:
+        NSBonjourServices: ["_lidarcam._tcp"]
+        CFBundleDisplayName: LidarCam
+        NSCameraUsageDescription: Records video for merging with lidar scans.
+        NSLocalNetworkUsageDescription: Lets the computer running the lidar start and stop recording and fetch the video.
+        NSMotionUsageDescription: Records which way up the phone is mounted.
+        UILaunchScreen: {}
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
