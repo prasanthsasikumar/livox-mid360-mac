@@ -7,23 +7,23 @@ Python scripts that talk to a Livox Mid-360 lidar over Ethernet: no Livox SDK, n
 
 *The whole setup: a MacBook, a Thunderbolt-to-Ethernet adapter and the Mid-360 on its own power supply.*
 
-**[Open the interactive 3D viewers](https://prasanthsasikumar.github.io/livox-mid360-mac/)** (drag to orbit, scroll to zoom).
+**[Open the interactive 3D viewers](https://flowsxr.github.io/livox-mid360-mac/)** (drag to orbit, scroll to zoom).
 
-[![Room mesh with the ceiling hidden](docs/images/room-mesh-open.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/room-mesh.html?ceiling=off)
+[![Room mesh with the ceiling hidden](docs/images/room-mesh-open.png)](https://flowsxr.github.io/livox-mid360-mac/room-mesh.html?ceiling=off)
 
 The example is a 10 × 21.5 m hall, scanned in 75 seconds by lifting and tilting the lidar around a table.
 
 | Stitched cloud, coloured by height | Mesh, from the lidar's position |
 |---|---|
-| [![Stitched point cloud](docs/images/cloud-orbit.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/cloud.html) | [![Inside the mesh](docs/images/room-mesh-inside.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/room-mesh.html?view=in) |
+| [![Stitched point cloud](docs/images/cloud-orbit.png)](https://flowsxr.github.io/livox-mid360-mac/cloud.html) | [![Inside the mesh](docs/images/room-mesh-inside.png)](https://flowsxr.github.io/livox-mid360-mac/room-mesh.html?view=in) |
 
 | Coloured from 26 iPhone photos | Seen from above |
 |---|---|
-| [![Photo-coloured cloud from inside](docs/images/colour-cloud-in.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/colour-cloud.html?view=in) | [![Photo-coloured cloud from above](docs/images/colour-cloud-orbit.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/colour-cloud.html) |
+| [![Photo-coloured cloud from inside](docs/images/colour-cloud-in.png)](https://flowsxr.github.io/livox-mid360-mac/colour-cloud.html?view=in) | [![Photo-coloured cloud from above](docs/images/colour-cloud-orbit.png)](https://flowsxr.github.io/livox-mid360-mac/colour-cloud.html) |
 
 | Top-down density | Cleaned room cloud |
 |---|---|
-| ![Top-down view](docs/images/stitched-top-down.png) | [![Room cloud from above](docs/images/room-cloud-top.png)](https://prasanthsasikumar.github.io/livox-mid360-mac/room-cloud.html?view=top) |
+| ![Top-down view](docs/images/stitched-top-down.png) | [![Room cloud from above](docs/images/room-cloud-top.png)](https://flowsxr.github.io/livox-mid360-mac/room-cloud.html?view=top) |
 
 ## Setup
 
